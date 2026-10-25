@@ -4,6 +4,7 @@
   "description": "Decentralized institutional trust registry: issue, verify and revoke signed records across institutions without a central authority.",
   "main": "src/server.js",
   "scripts": {
+    "build": "npm --prefix atelier-ui-codrops-main install && npm --prefix atelier-ui-codrops-main run build",
     "start": "node src/server.js",
     "build:ui": "npm --prefix atelier-ui-codrops-main run build",
     "dev:ui": "npm --prefix atelier-ui-codrops-main run dev",

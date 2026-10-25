@@ -145,7 +145,13 @@ async function createApp() {
     res.setHeader('Cache-Control', req.path.startsWith('/api/') ? 'no-store' : 'no-cache');
 
     const origin = req.headers.origin;
-    if (origin && allowedOrigins.has(origin)) {
+    let isSameHost = false;
+    if (origin) {
+      try {
+        isSameHost = new URL(origin).host === req.get('host');
+      } catch (_) {}
+    }
+    if (origin && (allowedOrigins.has(origin) || isSameHost)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     } else if (origin && req.path.startsWith('/api/')) {
@@ -515,7 +521,7 @@ async function createApp() {
 
 if (require.main === module) {
   createApp().then(({ app, ctx }) => {
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`\nVeriTrust is running`);
       console.log(`  Dashboard : http://localhost:${PORT}`);
       console.log(`  Registry  : ${ctx.address} (local in-memory chain, id 1337)\n`);
