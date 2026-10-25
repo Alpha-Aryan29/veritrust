@@ -78,20 +78,6 @@ export default function App() {
 
   return (
     <div className="app-shell relative min-h-screen text-neutral-100 flex flex-col font-sans selection:bg-emerald-500/30 selection:text-white">
-      {/* Background Ripple Effect */}
-      {webglEnabled && (
-        <FluidDistortion
-          blend={0}
-          intensity={0}
-          distortion={0.8}
-          force={1.4}
-          radius={0.25}
-          curl={4}
-          swirl={2.5}
-          densityDissipation={0.93}
-        />
-      )}
-
       {/* Modern Clean Floating Header */}
       <HeaderNav
         activeTab={activeTab}
@@ -101,17 +87,17 @@ export default function App() {
 
       {/* Main Content Area with Smooth Motion Pop-Up Transitions */}
       <main className="flex-1 w-full relative">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="popLayout">
           <motion.div
             key={activeTab}
-            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 18 }}
+            initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
+            exit={{ opacity: 0 }}
             transition={{
-              duration: reduceMotion ? 0.01 : 0.32,
-              ease: [0.22, 1, 0.36, 1],
+              duration: 0.18,
+              ease: "easeOut",
             }}
-            className="w-full"
+            className="w-full will-change-transform"
           >
             {/* TAB 1: OVERVIEW / HOME */}
             {activeTab === "home" && (

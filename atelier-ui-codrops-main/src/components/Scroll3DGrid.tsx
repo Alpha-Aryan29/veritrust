@@ -133,7 +133,7 @@ export default function Scroll3DGrid({
             scale,
             transformStyle: "preserve-3d",
           }}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 transition-transform duration-200"
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 will-change-transform"
         >
           {SAMPLES.map((sample, idx) => (
             <TiltCard
@@ -158,38 +158,39 @@ function TiltCard({
   onSelect?: (s: CertificateSample) => void;
   index: number;
 }) {
-  const [tilt, setTilt] = useState({ x: 0, y: 0 });
-  const [isHovered, setIsHovered] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
+    const el = cardRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
-    const rotateX = ((y - centerY) / centerY) * -14;
-    const rotateY = ((x - centerX) / centerX) * 14;
-    setTilt({ x: rotateX, y: rotateY });
+    const rotateX = ((y - centerY) / centerY) * -10;
+    const rotateY = ((x - centerX) / centerX) * 10;
+    el.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateZ(12px)`;
   };
 
   const handleMouseLeave = () => {
-    setTilt({ x: 0, y: 0 });
-    setIsHovered(false);
+    const el = cardRef.current;
+    if (!el) return;
+    el.style.transform = "perspective(1000px) rotateX(0deg) rotateY(0deg) translateZ(0px)";
   };
 
   return (
     <div
+      ref={cardRef}
       onMouseMove={handleMouseMove}
-      onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={handleMouseLeave}
       onClick={() => onSelect?.(sample)}
       style={{
-        transform: `perspective(1000px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) translateZ(${isHovered ? 40 : 0}px)`,
-        transition: isHovered
-          ? "transform 0.1s ease-out"
-          : "transform 0.5s ease",
+        transformStyle: "preserve-3d",
+        transition: "transform 0.15s ease-out, border-color 0.2s ease",
+        willChange: "transform",
       }}
-      className="relative rounded-2xl overflow-hidden cursor-pointer group glass-panel border border-white/10 hover:border-emerald-500/50 shadow-2xl transition-all duration-300"
+      className="relative rounded-2xl overflow-hidden cursor-pointer group glass-panel border border-white/10 hover:border-emerald-500/50 shadow-2xl"
     >
       {/* Background with texture & dark gradient overlay */}
       <div

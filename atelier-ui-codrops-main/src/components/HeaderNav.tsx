@@ -14,7 +14,7 @@ interface HeaderNavProps {
 export const NAV_ITEMS = [
   { id: "home", label: "Overview" },
   { id: "verify", label: "Verify" },
-  { id: "tamper", label: "Tamper Lab" },
+  { id: "tamper", label: "Tamper" },
   { id: "issue", label: "Issuance" },
   { id: "records", label: "Revocations" },
   { id: "network", label: "Consortium" },
@@ -80,11 +80,10 @@ export default function HeaderNav({
                 type="button"
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
-                className={`relative px-4 py-1.5 rounded-full text-xs font-medium transition-colors duration-200 z-10 ${
-                  isActive
-                    ? "text-white font-semibold"
-                    : "text-neutral-400 hover:text-neutral-200"
-                }`}
+                className={`relative px-4 py-1.5 rounded-full text-xs font-medium transition-colors duration-200 z-10 ${isActive
+                  ? "text-white font-semibold"
+                  : "text-neutral-400 hover:text-neutral-200"
+                  }`}
               >
                 {isActive && (
                   <motion.div
@@ -195,11 +194,10 @@ export default function HeaderNav({
                     onTabChange(item.id);
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-medium transition flex items-center justify-between ${
-                    isActive
-                      ? "bg-white/15 text-white font-semibold"
-                      : "text-neutral-300 hover:bg-white/5"
-                  }`}
+                  className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-medium transition flex items-center justify-between ${isActive
+                    ? "bg-white/15 text-white font-semibold"
+                    : "text-neutral-300 hover:bg-white/5"
+                    }`}
                 >
                   <span>{item.label}</span>
                   {isActive && (

@@ -26,17 +26,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang='en' className={`${instrumentSans.variable} antialiased dark`}>
+    <html lang='en' className={`${instrumentSans.variable} antialiased dark scroll-smooth`}>
       <body className='font-sans text-gray-100 bg-[#090b10] min-h-screen selection:bg-emerald-500/30 selection:text-white'>
         <AuthProvider>
-          <Preloader />
-          <SmoothScroll>
-            <WebglProvider>
-              <PixelTransition>
-                <TransitionPage>{children}</TransitionPage>
-              </PixelTransition>
-            </WebglProvider>
-          </SmoothScroll>
+          {children}
         </AuthProvider>
       </body>
     </html>

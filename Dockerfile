@@ -1,26 +1,17 @@
-FROM node:20-slim
+FROM node:20
 
 WORKDIR /app
 
-# Copy root dependency definitions
+# Copy dependency files
 COPY package.json package-lock.json ./
 
 # Install root dependencies
 RUN npm install --omit=optional
 
-# Copy frontend dependency definitions
-COPY atelier-ui-codrops-main/package.json atelier-ui-codrops-main/package-lock.json* ./atelier-ui-codrops-main/
-
-# Install frontend dependencies
-RUN npm --prefix atelier-ui-codrops-main install --omit=optional
-
-# Copy all source files
+# Copy all project code including pre-built frontend
 COPY . .
 
-# Build the Next.js frontend export
-RUN npm --prefix atelier-ui-codrops-main run build
-
-# Expose default port
+# Expose port
 EXPOSE 3000
 
 ENV PORT=3000
