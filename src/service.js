@@ -33,7 +33,13 @@ async function exec(ctx, actor, method, args) {
   try {
     const tx = await contract[method](...args);
     const receipt = await tx.wait();
-    return { ok: true, txHash: receipt.hash, block: receipt.blockNumber, gasUsed: Number(receipt.gasUsed) };
+    const res = { ok: true, txHash: receipt.hash, block: receipt.blockNumber, gasUsed: Number(receipt.gasUsed) };
+    if (typeof ctx.onTx === 'function') {
+      try {
+        await ctx.onTx({ actor, method, args, receipt, res });
+      } catch (_) { /* don't fail transaction on telemetry hook error */ }
+    }
+    return res;
   } catch (err) {
     return { ok: false, error: revertName(err, ctx.iface) };
   }

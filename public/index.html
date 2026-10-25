@@ -9,6 +9,8 @@
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
+
+  <!-- Header -->
   <header class="top">
     <div class="brand">
       <svg class="mark" viewBox="0 0 40 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="8" fill="none" stroke="currentColor" stroke-width="3.5"/><rect x="18" y="4" width="20" height="16" rx="8" fill="none" stroke="currentColor" stroke-width="3.5"/></svg>
@@ -17,9 +19,25 @@
         <p>A shared registry that lets institutions trust each other's records</p>
       </div>
     </div>
-    <dl class="strip" id="strip" aria-label="Registry status"></dl>
+    <div class="header-right">
+      <div id="live-indicator" class="live-pill" role="status" aria-label="Real-time registry stream active">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span class="live-text" id="live-text">Live</span>
+      </div>
+      <dl class="strip" id="strip" aria-label="Registry status"></dl>
+    </div>
   </header>
 
+  <!-- Blockchain Ribbon (Phase 2) -->
+  <aside class="ribbon" aria-label="Live blockchain activity">
+    <div class="ribbon-hdr">
+      <span class="ribbon-dot" aria-hidden="true"></span>
+      <span>Chain Activity</span>
+    </div>
+    <div class="ribbon-track" id="ribbon-track" role="list" aria-label="Latest mined blocks"></div>
+  </aside>
+
+  <!-- Folder-style Navigation Tabs -->
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button role="tab" id="tab-verify" aria-controls="p-verify" aria-selected="true">Verify</button>
     <button role="tab" id="tab-issue" aria-controls="p-issue" aria-selected="false">Issue</button>
@@ -45,7 +63,7 @@
           <button class="primary wide" id="do-verify">Verify record</button>
         </div>
         <div class="col" aria-live="polite" id="result-col">
-          <h2>Result</h2>
+          <h2>Certificate and Verification</h2>
           <div id="result" class="empty">
             <p>Each check appears here as a link in the chain of trust. If one fails, the chain breaks at that point.</p>
           </div>
@@ -104,8 +122,15 @@
 
     <!-- NETWORK -->
     <section id="p-network" role="tabpanel" aria-labelledby="tab-network" hidden>
-      <h2>Institutions in the network</h2>
+      <h2>Network Trust Graph</h2>
+      <p class="hint">Cryptographic authority flow: Consortium Registrar grants authority to institutional admins, who authorize keypairs to sign and anchor records.</p>
+      <div class="graph-card" id="trust-graph-box">
+        <svg id="trust-graph" viewBox="0 0 760 220" preserveAspectRatio="xMidYMid meet" aria-label="Trust network graph"></svg>
+      </div>
+
+      <h2 class="space">Institutions in the network</h2>
       <div id="institutions"></div>
+
       <h2 class="space">Audit trail</h2>
       <p class="hint">Rebuilt entirely from on-chain events, so anyone can reproduce it independently.</p>
       <div class="scroll"><table id="audit"><thead><tr><th>Block</th><th>Time</th><th>Event</th><th>Subject</th><th>Transaction</th></tr></thead><tbody></tbody></table></div>
@@ -123,6 +148,20 @@
       <div id="scn-out" class="empty"><p>Not run yet.</p></div>
     </section>
   </main>
+
+  <!-- Block details dialog (Phase 2) -->
+  <dialog id="block-modal" class="block-modal" aria-labelledby="bm-title">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="bm-title">Mined Block Details</h3>
+        <button class="ghost small" id="bm-close" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body" id="bm-body"></div>
+      <div class="modal-foot">
+        <button class="primary small" id="bm-ok">Close</button>
+      </div>
+    </div>
+  </dialog>
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>

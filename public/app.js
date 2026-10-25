@@ -1,10 +1,22 @@
 'use strict';
 
+/* ---------- state ---------- */
+const V = {
+  status: null,
+  records: [],
+  blocks: [],
+  currentCred: null,
+  currentHash: null,
+  currentResult: null,
+  sse: null,
+  live: false,
+};
+
 /* ---------- helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const short = (h, a = 8, b = 6) => (h && h.length > a + b + 2 ? `${h.slice(0, a)}…${h.slice(-b)}` : h || '');
-const fmtTime = (s) => new Date(s * 1000).toLocaleString();
+const fmtTime = (s) => (s ? new Date(s * 1000).toLocaleString() : 'N/A');
 
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -19,7 +31,7 @@ function toast(msg) {
   t.textContent = msg;
   t.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('on'), 2800);
+  toastTimer = setTimeout(() => t.classList.remove('on'), 3000);
 }
 
 const ICON = {
@@ -30,8 +42,15 @@ const ICON = {
 };
 
 const TONE = {
-  VALID: ['t-ok', 'ok'], TAMPERED: ['t-bad', 'no'], ISSUER_MISMATCH: ['t-bad', 'no'], UNAUTHORIZED_ISSUER: ['t-viol', 'no'],
-  NOT_ANCHORED: ['t-viol', 'bang'], REVOKED: ['t-warn', 'no'], EXPIRED: ['t-warn', 'bang'], INSTITUTION_SUSPENDED: ['t-warn', 'bang'], MALFORMED: ['t-grey', 'bang'],
+  VALID: ['t-ok', 'ok', 'stamp-valid'],
+  TAMPERED: ['t-bad', 'no', 'stamp-altered'],
+  ISSUER_MISMATCH: ['t-bad', 'no', 'stamp-altered'],
+  UNAUTHORIZED_ISSUER: ['t-viol', 'no', 'stamp-unauthorized'],
+  NOT_ANCHORED: ['t-viol', 'bang', 'stamp-unauthorized'],
+  REVOKED: ['t-warn', 'no', 'stamp-revoked'],
+  EXPIRED: ['t-warn', 'bang', 'stamp-revoked'],
+  INSTITUTION_SUSPENDED: ['t-warn', 'bang', 'stamp-revoked'],
+  MALFORMED: ['t-grey', 'bang', 'stamp-malformed'],
 };
 
 const ERR_TEXT = {
@@ -60,26 +79,84 @@ function showTab(name) {
 }
 for (const t of TABS) $(`#tab-${t}`).addEventListener('click', () => showTab(t));
 
-/* ---------- status strip ---------- */
-let status;
+/* ---------- status strip with animated counters ---------- */
 async function loadStatus() {
-  status = await api('/api/status');
-  $('#strip').innerHTML = [
-    ['Registry contract', short(status.contract, 8, 4)],
-    ['Block height', status.block],
-    ['Records anchored', status.records],
-    ['Revocations', status.revocations],
-  ].map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('');
+  const next = await api('/api/status');
+  updateStatusStrip(next);
+  V.status = next;
   const sel = $('#i-actor');
   if (!sel.options.length) {
-    for (const a of status.actors.filter((x) => x.key !== 'registrar' && /Issuer|issuer|mill/.test(x.label))) {
+    for (const a of next.actors.filter((x) => x.key !== 'registrar' && /Issuer|issuer|mill/.test(x.label))) {
       sel.add(new Option(a.label, a.key));
     }
   }
 }
 
-/* ---------- verify ---------- */
+function updateStatusStrip(next) {
+  const prev = V.status;
+  const items = [
+    { key: 'contract', label: 'Registry contract', val: short(next.contract, 8, 4) },
+    { key: 'block', label: 'Block height', val: next.block },
+    { key: 'records', label: 'Records anchored', val: next.records },
+    { key: 'revocations', label: 'Revocations', val: next.revocations },
+  ];
+
+  $('#strip').innerHTML = items.map((it) => {
+    const changed = prev && prev[it.key] !== undefined && prev[it.key] !== next[it.key];
+    const cls = changed ? 'pulse-num' : '';
+    return `<div><dt>${esc(it.label)}</dt><dd class="${cls}">${esc(it.val)}</dd></div>`;
+  }).join('');
+
+  // Remove animation class after pulse
+  setTimeout(() => {
+    $('#strip').querySelectorAll('.pulse-num').forEach((el) => el.classList.remove('pulse-num'));
+  }, 600);
+}
+
+/* ---------- certificate preview & verdict stamp ---------- */
+function certHTML(cred, verdict = null) {
+  if (!cred || !cred.credentialSubject) return '';
+  const subj = cred.credentialSubject;
+  const name = subj.name || 'Unnamed Student';
+  const prog = subj.program || 'Degree Certificate';
+  const year = subj.graduationYear || '2026';
+  const cgpa = subj.cgpa !== undefined ? subj.cgpa : 'N/A';
+  const inst = cred.issuer ? short(cred.issuer, 12, 6) : 'Institutional Trust Network';
+
+  let stampHtml = '';
+  if (verdict) {
+    const [, , stampClass] = TONE[verdict.verdict] || ['t-grey', 'bang', 'stamp-malformed'];
+    stampHtml = `<div class="stamp ${stampClass} stamped" aria-label="Verdict stamp: ${esc(verdict.label)}">${esc(verdict.label)}</div>`;
+  }
+
+  return `
+    <div class="cert-card" aria-label="Credential certificate preview">
+      ${stampHtml}
+      <div class="cert-head">
+        <div>
+          <div class="cert-badge">Official Institutional Record</div>
+          <div class="cert-inst">${esc(inst)}</div>
+        </div>
+        <svg width="28" height="28" viewBox="0 0 40 24" fill="none" stroke="currentColor" stroke-width="3" style="color:var(--brand);"><rect x="2" y="4" width="20" height="16" rx="8"/><rect x="18" y="4" width="20" height="16" rx="8"/></svg>
+      </div>
+      <div class="cert-body">
+        <h4>${esc(name)}</h4>
+        <div class="cert-prog">${esc(prog)}</div>
+      </div>
+      <div class="cert-meta">
+        <div><span>Graduation Year:</span><strong>${esc(year)}</strong></div>
+        <div><span>CGPA:</span><strong>${esc(cgpa)}</strong></div>
+        ${cred.expirationDate ? `<div><span>Valid Until:</span><strong>${esc(cred.expirationDate.slice(0, 10))}</strong></div>` : ''}
+      </div>
+      ${V.currentHash ? `<div class="cert-hash" title="On-chain fingerprint">Hash: ${esc(V.currentHash)}</div>` : ''}
+    </div>`;
+}
+
+/* ---------- verify panel ---------- */
 function renderResult(r) {
+  V.currentResult = r;
+  if (r.recordHash) V.currentHash = r.recordHash;
+
   const [tone, icon] = TONE[r.verdict] || ['t-grey', 'bang'];
   const chain = r.checks.map((c, i) => {
     const cls = c.status === 'pass' ? '' : c.status === 'fail' ? 'fail' : 'skipped';
@@ -87,14 +164,19 @@ function renderResult(r) {
     const detail = c.status === 'skipped' ? 'Not reached' : c.detail;
     return `<li class="link ${cls}" style="--i:${i}"><span class="node">${ic}</span><div class="txt"><strong>${esc(c.label)}</strong><small>${esc(detail)}</small></div></li>`;
   }).join('');
+
   const o = r.onChain;
   const facts = [];
   if (r.recordHash) facts.push(['Record fingerprint', `<dd>${esc(r.recordHash)}</dd>`]);
   if (o && o.institutionName) facts.push(['Issuing institution', `<dd class="plain">${esc(o.institutionName)}</dd>`]);
   if (o && o.issuedAt) facts.push(['Registered on-chain', `<dd class="plain">${esc(fmtTime(o.issuedAt))}</dd>`]);
   if (o && o.revoked) facts.push(['Revoked', `<dd class="plain">${esc(fmtTime(o.revokedAt))}, ${esc(o.reason)}</dd>`]);
+
+  const certBoxHtml = V.currentCred ? certHTML(V.currentCred, r) : '';
+
   $('#result').className = 'reveal';
   $('#result').innerHTML = `
+    ${certBoxHtml}
     <div class="verdict ${tone}">
       <div class="seal">${ICON[icon]}</div>
       <div><h3>${esc(r.label)}</h3><p>${esc(r.reason)}</p></div>
@@ -108,7 +190,13 @@ async function runVerify() {
   btn.disabled = true;
   try {
     const text = $('#cred').value.trim();
-    renderResult(await api('/api/verify', { credential: text }));
+    try {
+      V.currentCred = JSON.parse(text);
+    } catch (_) {
+      V.currentCred = null;
+    }
+    const res = await api('/api/verify', { credential: text });
+    renderResult(res);
     loadStatus();
   } catch (e) { toast(e.message); } finally { btn.disabled = false; }
 }
@@ -123,11 +211,22 @@ async function sample(actor) {
   });
   return r.credential;
 }
-const setCred = (c) => { $('#cred').value = JSON.stringify(c, null, 2); $('#result').className = 'empty'; $('#result').innerHTML = '<p>Record loaded. Choose Verify record.</p>'; };
+
+function setCred(c) {
+  V.currentCred = c;
+  V.currentHash = null;
+  V.currentResult = null;
+  $('#cred').value = JSON.stringify(c, null, 2);
+  $('#result').className = 'reveal';
+  $('#result').innerHTML = `
+    ${certHTML(c, null)}
+    <div class="empty"><p>Record loaded into preview. Click <b>Verify record</b> to test against the on-chain registry.</p></div>`;
+}
+
 $('#ld-valid').addEventListener('click', async () => { setCred(await sample('sitRegistry')); loadStatus(); });
 $('#ld-alter').addEventListener('click', async () => {
   const c = await sample('sitRegistry');
-  c.credentialSubject.cgpa = 9.9; // edited after signing
+  c.credentialSubject.cgpa = 9.9;
   setCred(c); toast('CGPA changed from 8.4 to 9.9 after signing');
   loadStatus();
 });
@@ -152,27 +251,29 @@ $('#issue-form').addEventListener('submit', async (ev) => {
       <dl class="facts"><dt>Record fingerprint</dt><dd>${esc(r.recordHash)}</dd></dl>
       <div class="row"><button class="ghost" id="to-verify">Send to Verify</button><button class="ghost" id="copy-cred">Copy record</button></div>
       <pre class="code">${esc(JSON.stringify(r.credential, null, 2))}</pre>`;
-    $('#to-verify').addEventListener('click', () => { setCred(r.credential); showTab('verify'); });
+    $('#to-verify').addEventListener('click', () => { setCred(r.credential); showTab('verify'); runVerify(); });
     $('#copy-cred').addEventListener('click', () => navigator.clipboard.writeText(JSON.stringify(r.credential, null, 2)).then(() => toast('Record copied')));
     loadStatus();
   } catch (e) { toast(e.message); } finally { btn.disabled = false; }
 });
 
-/* ---------- records & revocation ---------- */
+/* ---------- records & live revocation ---------- */
 const REASONS = ['Unspecified', 'Issued in error', 'Fraud or misconduct', 'Degree withdrawn', 'Superseded by a new record'];
 async function loadRecords() {
   const rows = await api('/api/records');
+  V.records = rows;
   const box = $('#records');
   if (!rows.length) { box.className = 'empty'; box.innerHTML = '<p>Nothing issued yet. Use the Issue tab.</p>'; return; }
   box.className = '';
-  const actorOpts = status.actors.filter((a) => a.key !== 'registrar').map((a) => `<option value="${a.key}">${esc(a.label)}</option>`).join('');
+  const actorOpts = V.status ? V.status.actors.filter((a) => a.key !== 'registrar').map((a) => `<option value="${a.key}">${esc(a.label)}</option>`).join('') : '';
+
   box.innerHTML = `<div class="scroll"><table><thead><tr><th>Record</th><th>Issued by</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows.map((r, i) => {
     const [cls, label] = !r.anchored ? ['t-viol', 'Never registered'] : r.revoked ? ['t-warn', `Revoked: ${r.reason}`] : ['t-ok', 'Active'];
-    return `<tr data-i="${i}">
+    return `<tr data-i="${i}" data-hash="${esc(r.recordHash)}">
       <td><b>${esc(r.name)}</b><br><span class="hash" title="${esc(r.recordHash)}">${esc(short(r.recordHash, 10, 8))}</span></td>
       <td>${esc(r.issuedBy)}</td>
-      <td><span class="badge ${cls}">${esc(label)}</span></td>
-      <td>${r.anchored && !r.revoked ? `<button class="small rv">Revoke…</button>` : ''}
+      <td class="status-cell"><span class="badge ${cls}">${esc(label)}</span></td>
+      <td class="action-cell">${r.anchored && !r.revoked ? `<button class="small rv">Revoke…</button>` : ''}
         <button class="small vf">Verify</button>
         <div class="rev-box" hidden>
           <select class="who" aria-label="Revoke as">${actorOpts}</select>
@@ -180,38 +281,212 @@ async function loadRecords() {
           <button class="small go">Confirm</button>
         </div><div class="note hint"></div></td></tr>`;
   }).join('')}</tbody></table></div>`;
+
   box.querySelectorAll('tr[data-i]').forEach((tr) => {
     const r = rows[Number(tr.dataset.i)];
     const rb = $('.rev-box', tr);
     if ($('.who', tr)) $('.who', tr).value = r.actor;
     $('.rv', tr)?.addEventListener('click', () => { rb.hidden = !rb.hidden; });
     $('.vf', tr).addEventListener('click', () => { setCred(r.credential); showTab('verify'); runVerify(); });
-    $('.go', tr).addEventListener('click', async () => {
+    $('.go', tr)?.addEventListener('click', async () => {
       const out = await api('/api/revoke', { actor: $('.who', tr).value, recordHash: r.recordHash, reason: Number($('.why', tr).value) });
-      if (out.revoked) { toast('Record revoked'); loadStatus(); loadRecords(); }
-      else $('.note', tr).textContent = `Rejected by the contract: ${errText(out.tx.error)}`;
+      if (out.revoked) {
+        toast('Record revoked on-chain');
+        loadStatus();
+        loadRecords();
+      } else {
+        $('.note', tr).textContent = `Rejected by the contract: ${errText(out.tx.error)}`;
+      }
     });
   });
 }
 
-/* ---------- network & audit ---------- */
+/* Handle live revocation broadcast across windows */
+function handleLiveRevocation(ev) {
+  // 1. Update Records table row if present
+  const tr = $(`tr[data-hash="${ev.recordHash}"]`);
+  if (tr) {
+    const statusCell = $('.status-cell', tr);
+    if (statusCell) {
+      statusCell.innerHTML = `<span class="badge t-warn">Revoked: ${esc(ev.reason)}</span>`;
+    }
+    const rvBtn = $('.rv', tr);
+    if (rvBtn) rvBtn.remove();
+    const revBox = $('.rev-box', tr);
+    if (revBox) revBox.remove();
+    tr.classList.add('flash-revoked');
+    setTimeout(() => tr.classList.remove('flash-revoked'), 2000);
+  }
+
+  // 2. If Verify panel is showing this exact record, live flip to Revoked!
+  if (V.currentHash && V.currentHash.toLowerCase() === ev.recordHash.toLowerCase()) {
+    toast(`Active record was revoked on-chain (${ev.reason})`);
+    runVerify();
+  }
+}
+
+/* Handle live record issued broadcast across windows */
+function handleLiveRecordIssued(ev) {
+  loadStatus();
+  if (!$('#p-records').hidden) {
+    loadRecords();
+  }
+}
+
+/* ---------- blockchain ribbon (Phase 2) ---------- */
+function renderRibbon(blocks) {
+  V.blocks = blocks || [];
+  const track = $('#ribbon-track');
+  if (!track) return;
+  track.innerHTML = V.blocks.slice(0, 10).map((b) => createBlockChipHtml(b)).join('');
+  attachBlockChipListeners();
+}
+
+function createBlockChipHtml(b, isNew = false) {
+  const eventCls = b.event === 'RecordIssued' ? 't-ok' : b.event === 'RecordRevoked' ? 't-warn' : 't-viol';
+  return `
+    <button class="block-chip ${isNew ? 'slide-in' : ''}" data-hash="${esc(b.txHash)}" aria-label="Block ${b.blockNumber}: ${esc(b.event)}">
+      <span class="chip-num">#${b.blockNumber}</span>
+      <span class="chip-event badge ${eventCls}">${esc(b.event || 'Mined')}</span>
+      <span class="chip-tx">${esc(short(b.txHash, 6, 4))}</span>
+    </button>`;
+}
+
+function addBlockToRibbon(b) {
+  V.blocks.unshift(b);
+  if (V.blocks.length > 25) V.blocks.pop();
+  const track = $('#ribbon-track');
+  if (!track) return;
+  track.insertAdjacentHTML('afterbegin', createBlockChipHtml(b, true));
+  attachBlockChipListeners();
+}
+
+function attachBlockChipListeners() {
+  $('#ribbon-track').querySelectorAll('.block-chip').forEach((btn) => {
+    btn.onclick = () => {
+      const txHash = btn.dataset.hash;
+      const blk = V.blocks.find((x) => x.txHash === txHash);
+      if (blk) showBlockModal(blk);
+    };
+  });
+}
+
+function showBlockModal(b) {
+  const modal = $('#block-modal');
+  $('#bm-title').textContent = `Block #${b.blockNumber} Details`;
+  $('#bm-body').innerHTML = `
+    <dl>
+      <dt>Block Number</dt><dd><b>#${b.blockNumber}</b></dd>
+      <dt>Event Type</dt><dd><span class="badge ${b.event === 'RecordIssued' ? 't-ok' : b.event === 'RecordRevoked' ? 't-warn' : 't-viol'}">${esc(b.event)}</span></dd>
+      <dt>Summary</dt><dd class="plain">${esc(b.summary || 'Transaction confirmed on ledger')}</dd>
+      <dt>Transaction Hash</dt><dd>${esc(b.txHash)}</dd>
+      <dt>Gas Used</dt><dd>${(b.gasUsed || 0).toLocaleString()} gas</dd>
+      <dt>Mined At</dt><dd>${esc(fmtTime(b.timestamp))}</dd>
+      ${b.actor ? `<dt>Actor / Signer</dt><dd class="plain">${esc(b.actor)}</dd>` : ''}
+    </dl>`;
+  modal.showModal();
+}
+
+$('#bm-close')?.addEventListener('click', () => $('#block-modal').close());
+$('#bm-ok')?.addEventListener('click', () => $('#block-modal').close());
+$('#block-modal')?.addEventListener('click', (e) => {
+  if (e.target === $('#block-modal')) $('#block-modal').close();
+});
+
+/* ---------- network & trust graph (Phase 1) ---------- */
+function drawTrustGraph(institutions) {
+  const svg = $('#trust-graph');
+  if (!svg || !institutions || !institutions.length) return;
+
+  const sit = institutions.find((x) => x.id === 'SIT') || { active: true, name: 'SIT' };
+  const ksu = institutions.find((x) => x.id === 'KSU') || { active: true, name: 'KSU' };
+
+  svg.innerHTML = `
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 1 L 10 5 L 0 9 z" fill="#0F6E5C" />
+      </marker>
+    </defs>
+
+    <!-- Connector lines -->
+    <!-- Registrar to SIT -->
+    <path d="M 380 40 L 220 95" class="edge-line ${sit.active ? 'active' : 'suspended'}" />
+    <!-- Registrar to KSU -->
+    <path d="M 380 40 L 540 95" class="edge-line ${ksu.active ? 'active' : 'suspended'}" />
+
+    <!-- SIT to issuers -->
+    <path d="M 220 135 L 130 185" class="edge-line ${sit.active ? 'active' : 'suspended'}" />
+    <path d="M 220 135 L 290 185" class="edge-line ${sit.active ? 'active' : 'suspended'}" />
+
+    <!-- KSU to issuers -->
+    <path d="M 540 135 L 540 185" class="edge-line ${ksu.active ? 'active' : 'suspended'}" />
+
+    <!-- Root: Consortium Registrar -->
+    <g transform="translate(280, 10)">
+      <rect width="200" height="34" class="node-box active" />
+      <text x="100" y="22" text-anchor="middle" font-size="12" font-weight="700" fill="#0F6E5C">Trust Registrar (Consortium)</text>
+    </g>
+
+    <!-- Institution 1: SIT -->
+    <g transform="translate(110, 95)">
+      <rect width="220" height="38" class="node-box ${sit.active ? 'active' : 'suspended'}" />
+      <text x="110" y="20" text-anchor="middle" font-size="12" font-weight="600" fill="#16202A">Sahyadri Institute (SIT)</text>
+      <text x="110" y="32" text-anchor="middle" font-size="10" fill="${sit.active ? '#0F7B64' : '#8F5500'}">${sit.active ? 'Active in consortium' : 'Suspended by registrar'}</text>
+    </g>
+
+    <!-- Institution 2: KSU -->
+    <g transform="translate(430, 95)">
+      <rect width="220" height="38" class="node-box ${ksu.active ? 'active' : 'suspended'}" />
+      <text x="110" y="20" text-anchor="middle" font-size="12" font-weight="600" fill="#16202A">Konkan State Univ (KSU)</text>
+      <text x="110" y="32" text-anchor="middle" font-size="10" fill="${ksu.active ? '#0F7B64' : '#8F5500'}">${ksu.active ? 'Active in consortium' : 'Suspended by registrar'}</text>
+    </g>
+
+    <!-- SIT Issuers -->
+    <g transform="translate(50, 185)">
+      <rect width="150" height="28" class="node-box" />
+      <text x="75" y="18" text-anchor="middle" font-size="10" fill="#566370">SIT Registrar Key</text>
+    </g>
+    <g transform="translate(220, 185)">
+      <rect width="140" height="28" class="node-box" />
+      <text x="70" y="18" text-anchor="middle" font-size="10" fill="#566370">SIT Exam Cell Key</text>
+    </g>
+
+    <!-- KSU Issuer -->
+    <g transform="translate(465, 185)">
+      <rect width="150" height="28" class="node-box" />
+      <text x="75" y="18" text-anchor="middle" font-size="10" fill="#566370">KSU Registrar Key</text>
+    </g>`;
+}
+
 async function loadNetwork() {
   await loadStatus();
-  $('#institutions').innerHTML = status.institutions.map((i) => `
+  drawTrustGraph(V.status.institutions);
+
+  $('#institutions').innerHTML = V.status.institutions.map((i) => `
     <div class="inst ${i.active ? 't-ok' : 't-warn'}">
       <div>
-        <h3>${esc(i.name)} <span class="badge">${i.active ? 'In good standing' : 'Suspended'}</span></h3>
+        <h3>${esc(i.name)} <span class="badge ${i.active ? 't-ok' : 't-warn'}">${i.active ? 'In good standing' : 'Suspended'}</span></h3>
         <div class="addr">Admin key ${esc(i.admin)}</div>
         <ul>${i.issuers.map((s) => `<li>${esc(s.label)}<span class="addr"> ${esc(short(s.address, 8, 6))}</span></li>`).join('')}</ul>
       </div>
       <div><button class="small" data-id="${esc(i.id)}" data-active="${i.active}">${i.active ? 'Suspend (registrar)' : 'Reinstate (registrar)'}</button></div>
     </div>`).join('');
+
   $('#institutions').querySelectorAll('button[data-id]').forEach((b) => b.addEventListener('click', async () => {
     await api('/api/institution/status', { id: b.dataset.id, active: b.dataset.active !== 'true' });
-    toast('Registrar updated the institution'); loadNetwork();
+    toast('Registrar updated the institution standing');
+    loadNetwork();
   }));
+
   const log = await api('/api/audit');
-  $('#audit tbody').innerHTML = log.map((e) => `<tr><td>${e.block}</td><td>${esc(fmtTime(e.time))}</td><td>${esc(e.summary)}</td><td class="hash">${esc(short(e.subject, 12, 6))}</td><td class="hash">${esc(short(e.txHash, 10, 6))}</td></tr>`).join('');
+  $('#audit tbody').innerHTML = log.map((e) => `
+    <tr>
+      <td>${e.block}</td>
+      <td>${esc(fmtTime(e.time))}</td>
+      <td>${esc(e.summary)}</td>
+      <td class="hash">${esc(short(e.subject, 12, 6))}</td>
+      <td class="hash">${esc(short(e.txHash, 10, 6))}</td>
+    </tr>`).join('');
 }
 
 /* ---------- scenarios ---------- */
@@ -229,5 +504,107 @@ $('#run-scn').addEventListener('click', async (ev) => {
   } catch (e) { toast(e.message); } finally { b.disabled = false; b.textContent = 'Run all scenarios'; }
 });
 
+/* ---------- SSE real-time stream (Phase 1) ---------- */
+function initSSE() {
+  if (V.sse) V.sse.close();
+
+  const ind = $('#live-indicator');
+  const txt = $('#live-text');
+
+  try {
+    const sse = new EventSource('/api/events');
+    V.sse = sse;
+
+    sse.onopen = () => {
+      V.live = true;
+      ind.classList.remove('off');
+      txt.textContent = 'Live';
+    };
+
+    sse.addEventListener('init', (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.recentBlocks) renderRibbon(d.recentBlocks);
+      } catch (_) {}
+    });
+
+    sse.addEventListener('block', (e) => {
+      try {
+        const blockItem = JSON.parse(e.data);
+        addBlockToRibbon(blockItem);
+        loadStatus();
+      } catch (_) {}
+    });
+
+    sse.addEventListener('record_issued', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleLiveRecordIssued(data);
+      } catch (_) {}
+    });
+
+    sse.addEventListener('record_revoked', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleLiveRevocation(data);
+      } catch (_) {}
+    });
+
+    sse.addEventListener('institution_status', () => {
+      loadStatus();
+      if (!$('#p-network').hidden) loadNetwork();
+    });
+
+    sse.addEventListener('audit', (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        const tbody = $('#audit tbody');
+        if (tbody) {
+          const rowHtml = `
+            <tr class="flash-new">
+              <td>${ev.block}</td>
+              <td>${esc(fmtTime(ev.time))}</td>
+              <td>${esc(ev.summary)}</td>
+              <td class="hash">${esc(short(ev.subject, 12, 6))}</td>
+              <td class="hash">${esc(short(ev.txHash, 10, 6))}</td>
+            </tr>`;
+          tbody.insertAdjacentHTML('afterbegin', rowHtml);
+          setTimeout(() => {
+            const tr = tbody.querySelector('.flash-new');
+            if (tr) tr.classList.remove('flash-new');
+          }, 1800);
+        }
+      } catch (_) {}
+    });
+
+    sse.addEventListener('status', (e) => {
+      try {
+        const snap = JSON.parse(e.data);
+        updateStatusStrip(snap);
+        V.status = snap;
+      } catch (_) {}
+    });
+
+    sse.onerror = () => {
+      V.live = false;
+      ind.classList.add('off');
+      txt.textContent = 'Reconnecting…';
+    };
+  } catch (_) {
+    ind.classList.add('off');
+    txt.textContent = 'Disconnected';
+  }
+}
+
 /* ---------- boot ---------- */
-loadStatus().then(() => showTab((location.hash || '#verify').slice(1))).catch((e) => toast(e.message));
+async function boot() {
+  await loadStatus();
+  try {
+    const blocks = await api('/api/blocks');
+    renderRibbon(blocks);
+  } catch (_) {}
+  initSSE();
+  showTab((location.hash || '#verify').slice(1));
+}
+
+boot().catch((e) => toast(e.message));
