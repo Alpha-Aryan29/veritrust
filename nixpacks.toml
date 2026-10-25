@@ -1,0 +1,16 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = [
+  "npm install --omit=optional",
+  "npm --prefix atelier-ui-codrops-main install --omit=optional"
+]
+
+[phases.build]
+cmds = [
+  "npm --prefix atelier-ui-codrops-main run build"
+]
+
+[start]
+cmd = "node src/server.js"
