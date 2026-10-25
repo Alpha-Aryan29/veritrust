@@ -1,0 +1,7 @@
+node_modules
+atelier-ui-codrops-main/node_modules
+atelier-ui-codrops-main/.next
+.data
+.git
+*.zip
+*.log
