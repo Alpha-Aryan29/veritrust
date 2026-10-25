@@ -97,6 +97,7 @@ test/tier1.test.js            automated tests for SSE, blocks, QR, /v/:id & rate
 test/tier2.test.js            automated tests for Tamper Lab, Batch Issuance & Analytics
 scripts/demo.js               terminal demo
 docs/PITCH_AND_QA.md          7-minute pitch plan, judge Q&A, and demo scripts
+docs/WORKFLOWS_AND_ARCHITECTURE.md Complete system architecture, workflows, and UI manual
 ```
 
 ## API
