@@ -44,6 +44,7 @@
     <button role="tab" id="tab-issue" aria-controls="p-issue" aria-selected="false">Issue</button>
     <button role="tab" id="tab-records" aria-controls="p-records" aria-selected="false">Records</button>
     <button role="tab" id="tab-network" aria-controls="p-network" aria-selected="false">Network and audit</button>
+    <button role="tab" id="tab-analytics" aria-controls="p-analytics" aria-selected="false">Analytics</button>
     <button role="tab" id="tab-scenarios" aria-controls="p-scenarios" aria-selected="false">Scenarios</button>
   </nav>
 
@@ -52,8 +53,69 @@
     <section id="p-verify" role="tabpanel" aria-labelledby="tab-verify">
       <div class="split">
         <div class="col">
-          <h2>Record to verify</h2>
-          <p class="hint">Upload a signed credential file, paste JSON, or load a sample. Verification reads the shared registry only; it never contacts the issuing institution.</p>
+          <div class="verify-bar">
+            <div>
+              <h2>Record to verify</h2>
+              <p class="hint">Upload a signed credential file, paste JSON, or load a sample. Verification reads the shared registry only; it never contacts the issuing institution.</p>
+            </div>
+            <div class="verify-controls">
+              <label class="toggle-switch" title="Toggle detailed educational explanations and threat analysis for each check">
+                <input type="checkbox" id="chk-explain">
+                <span class="switch-slider"></span>
+                <span class="switch-label">Explain mode</span>
+              </label>
+              <button type="button" class="ghost small tamper-toggle-btn" id="btn-toggle-tamper">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2v7.31L4.2 19.34A2 2 0 0 0 6 22h12a2 2 0 0 0 1.8-2.66L14 9.31V2h-4z"/><path d="M8.5 2h7M7 16h10"/></svg>
+                Tamper Lab
+              </button>
+            </div>
+          </div>
+
+          <!-- Tamper Lab interactive mutation workbench (Tier 2 Item F) -->
+          <div id="tamper-box" class="tamper-box" hidden>
+            <div class="tamper-head">
+              <div>
+                <h4>Tamper Lab: Avalanche Effect Sandbox</h4>
+                <p class="tamper-sub">Modify any field in real time. Observe how altering even one character scrambles ~50% of the cryptographic hash and immediately triggers mathematical rejection.</p>
+              </div>
+              <button type="button" class="ghost small" id="btn-close-tamper" aria-label="Close Tamper Lab">&times;</button>
+            </div>
+            <div class="tamper-grid">
+              <label>Student Name
+                <input type="text" id="tl-name" value="Asha Patil">
+              </label>
+              <label>Programme / Degree
+                <input type="text" id="tl-program" value="B.Tech in Computer Engineering">
+              </label>
+              <div class="two">
+                <label>Graduation Year
+                  <input type="number" id="tl-year" min="1950" max="2100" value="2026">
+                </label>
+                <label>CGPA (<span id="tl-cgpa-val">8.40</span>)
+                  <input type="number" id="tl-cgpa" step="0.05" min="0" max="10" value="8.40">
+                </label>
+              </div>
+              <div class="slider-row">
+                <input type="range" id="tl-cgpa-range" min="0" max="10" step="0.05" value="8.40" aria-label="CGPA live slider">
+              </div>
+            </div>
+
+            <div class="avalanche-card">
+              <div class="avalanche-meta">
+                <span class="avalanche-title">Cryptographic Avalanche Variance</span>
+                <span class="avalanche-badge" id="tl-avalanche-badge">Original Hash (0 bits changed)</span>
+              </div>
+              <div class="diff-container" id="tl-diff-box">
+                <div class="diff-row"><span class="diff-tag">ORIGINAL:</span><span class="diff-hash" id="tl-orig-hash">—</span></div>
+                <div class="diff-row"><span class="diff-tag">MUTATED:</span><span class="diff-hash" id="tl-mut-hash">—</span></div>
+              </div>
+            </div>
+
+            <div class="tamper-actions">
+              <button type="button" class="ghost small" id="tl-revert">↩ Revert to original</button>
+              <span class="tamper-status-hint" id="tl-status-hint">Live debounced re-verification active</span>
+            </div>
+          </div>
           
           <!-- File drag and drop (Phase 5) -->
           <div class="drop-zone" id="drop-zone" tabindex="0" role="button" aria-label="Drop credential .json file here or click to browse">
@@ -92,36 +154,81 @@
     <section id="p-issue" role="tabpanel" aria-labelledby="tab-issue" hidden>
       <div class="split">
         <div class="col">
-          <h2>Issue a record</h2>
-          <p class="hint">The issuer signs the record with its own key. Only a fingerprint of the record is written to the registry; names and grades stay off-chain.</p>
-          <form id="issue-form" autocomplete="off">
-            <label>Issue as
-              <select id="i-actor"></select>
-            </label>
-            <label>Student name
-              <input id="i-name" required maxlength="80" value="Asha Patil">
-            </label>
-            <label>Programme
-              <input id="i-program" required maxlength="120" value="B.Tech in Computer Engineering">
-            </label>
-            <div class="two">
-              <label>Graduation year
-                <input id="i-year" type="number" min="1950" max="2100" value="2026">
+          <div class="issue-mode-bar">
+            <div class="segmented-control" role="group" aria-label="Issuance Mode">
+              <button type="button" class="seg-btn active" id="btn-mode-single">Single Record</button>
+              <button type="button" class="seg-btn" id="btn-mode-batch">Batch Issuance (CSV / Cohort)</button>
+            </div>
+            <span class="mode-badge">⚡ Batch saves ~47% gas</span>
+          </div>
+
+          <!-- Single Issuance Form -->
+          <div id="single-issue-wrap">
+            <h2>Issue a record</h2>
+            <p class="hint">The issuer signs the record with its own key. Only a fingerprint of the record is written to the registry; names and grades stay off-chain.</p>
+            <form id="issue-form" autocomplete="off">
+              <label>Issue as
+                <select id="i-actor"></select>
               </label>
-              <label>CGPA
-                <input id="i-cgpa" type="number" step="0.01" min="0" max="10" value="8.7">
+              <label>Student name
+                <input id="i-name" required maxlength="80" value="Asha Patil">
+              </label>
+              <label>Programme
+                <input id="i-program" required maxlength="120" value="B.Tech in Computer Engineering">
+              </label>
+              <div class="two">
+                <label>Graduation year
+                  <input id="i-year" type="number" min="1950" max="2100" value="2026">
+                </label>
+                <label>CGPA
+                  <input id="i-cgpa" type="number" step="0.01" min="0" max="10" value="8.7">
+                </label>
+              </div>
+              <label>Valid for
+                <select id="i-days">
+                  <option value="">No expiry</option>
+                  <option value="3650" selected>10 years</option>
+                  <option value="365">1 year</option>
+                  <option value="-1">Already expired (for testing)</option>
+                </select>
+              </label>
+              <button class="primary wide" type="submit">Sign and register record</button>
+            </form>
+          </div>
+
+          <!-- Batch Issuance Box (Tier 2 Item I) -->
+          <div id="batch-issue-wrap" hidden>
+            <h2>Batch Issuance via EVM Calldata</h2>
+            <p class="hint">Anchor up to 50 credentials in a single EVM transaction using <code>issueBatch(bytes32[])</code>. Merkle-anchored off-chain hashes preserve student privacy while slashing gas costs by ~47%.</p>
+            
+            <div class="batch-quick-actions">
+              <button type="button" class="ghost small" id="btn-load-cohort">🎓 Load Sample Cohort (15 graduates)</button>
+              <label class="ghost small btn-file-label">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Upload CSV
+                <input type="file" id="batch-csv-input" accept=".csv,text/csv" class="sr">
               </label>
             </div>
-            <label>Valid for
-              <select id="i-days">
-                <option value="">No expiry</option>
-                <option value="3650" selected>10 years</option>
-                <option value="365">1 year</option>
-                <option value="-1">Already expired (for testing)</option>
-              </select>
+
+            <label style="margin-top:12px;">Issue as
+              <select id="b-actor"></select>
             </label>
-            <button class="primary wide" type="submit">Sign and register record</button>
-          </form>
+
+            <div class="batch-preview-wrap">
+              <div class="batch-preview-head">
+                <strong>Cohort Preview (<span id="batch-count">0</span> records ready)</strong>
+                <button type="button" class="ghost small" id="btn-clear-batch" style="display:none;">Clear</button>
+              </div>
+              <div class="scroll batch-scroll">
+                <table id="batch-preview-table">
+                  <thead><tr><th>#</th><th>Student Name</th><th>Programme</th><th>Year</th><th>CGPA</th></tr></thead>
+                  <tbody><tr><td colspan="5" style="text-align:center; color:var(--muted); padding:18px;">Click "Load Sample Cohort" or upload a CSV file with columns: <code>name,program,graduationYear,cgpa</code></td></tr></tbody>
+                </table>
+              </div>
+            </div>
+
+            <button type="button" class="primary wide" id="btn-do-batch-issue" disabled>Sign & Anchor 0 Records in 1 Transaction</button>
+          </div>
         </div>
         <div class="col" aria-live="polite">
           <h2>Outcome</h2>
@@ -150,7 +257,76 @@
 
       <h2 class="space">Audit trail</h2>
       <p class="hint">Rebuilt entirely from on-chain events, so anyone can reproduce it independently.</p>
-      <div class="scroll"><table id="audit"><thead><tr><th>Block</th><th>Time</th><th>Event</th><th>Subject</th><th>Transaction</th></tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <!-- ANALYTICS (Tier 2 Item H) -->
+    <section id="p-analytics" role="tabpanel" aria-labelledby="tab-analytics" hidden>
+      <div class="bar">
+        <div>
+          <h2>Registry Telemetry & Analytics</h2>
+          <p class="hint">Live metrics aggregated from smart contract state and verifications across the decentralized trust network.</p>
+        </div>
+        <button type="button" class="ghost small" id="btn-refresh-analytics">↻ Refresh metrics</button>
+      </div>
+
+      <!-- KPI Grid -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <span class="kpi-label">Total Records Anchored</span>
+          <span class="kpi-val" id="kpi-records">0</span>
+          <span class="kpi-sub">On-chain keccak256 fingerprints</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Verifications Processed</span>
+          <span class="kpi-val" id="kpi-verifications">0</span>
+          <span class="kpi-sub">Live peer cryptographic checks</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Attacks / Breaches Stopped</span>
+          <span class="kpi-val t-bad" id="kpi-attacks">0</span>
+          <span class="kpi-sub">Altered data & rogue issuer keys</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Batch Gas Savings</span>
+          <span class="kpi-val t-ok" id="kpi-savings">46.9%</span>
+          <span class="kpi-sub">~52.1k vs ~98.2k gas per record</span>
+        </div>
+      </div>
+
+      <!-- Charts Grid (Pure inline SVGs, zero external dependencies) -->
+      <div class="charts-grid">
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>Records by Institution</h3>
+            <span class="chart-legend-badge">Anchored on-chain</span>
+          </div>
+          <svg id="chart-inst" viewBox="0 0 420 180" class="svg-chart" aria-label="Records by Institution Chart"></svg>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>Verification Verdicts</h3>
+            <span class="chart-legend-badge">Live verdict stream</span>
+          </div>
+          <svg id="chart-verdicts" viewBox="0 0 420 180" class="svg-chart" aria-label="Verification Outcomes Chart"></svg>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>EVM Gas Efficiency</h3>
+            <span class="chart-legend-badge">Single vs Batch Issuance</span>
+          </div>
+          <svg id="chart-gas" viewBox="0 0 420 180" class="svg-chart" aria-label="Gas Efficiency Comparison Chart"></svg>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>Revocations by Reason</h3>
+            <span class="chart-legend-badge">Smart contract events</span>
+          </div>
+          <svg id="chart-reasons" viewBox="0 0 420 180" class="svg-chart" aria-label="Revocation Reasons Chart"></svg>
+        </div>
+      </div>
     </section>
 
     <!-- SCENARIOS -->

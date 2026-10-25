@@ -69,6 +69,37 @@ async function revokeRecord(ctx, { actor, recordHash, reason = 0 }) {
   return { revoked: tx.ok, tx, by: a.label };
 }
 
+async function issueBatchRecords(ctx, { actor, records, type, validDays }) {
+  const a = ctx.actors[actor];
+  if (!a) throw new Error(`Unknown actor: ${actor}`);
+  if (!Array.isArray(records) || records.length === 0) throw new Error('Empty batch');
+
+  const signedList = [];
+  const hashes = [];
+
+  for (const s of records) {
+    const cred = await signCredential(
+      buildCredential({ issuerAddress: a.address, subject: s, type, validDays }),
+      a.wallet
+    );
+    const h = hashCredential(cred);
+    signedList.push({ credential: cred, recordHash: h, name: s.name, program: s.program });
+    hashes.push(h);
+  }
+
+  const tx = await exec(ctx, actor, 'issueBatch', [hashes]);
+  const gasPerRecord = tx.ok && tx.gasUsed ? Math.round(tx.gasUsed / records.length) : null;
+  return {
+    anchored: tx.ok,
+    tx,
+    count: records.length,
+    gasPerRecord,
+    totalGas: tx.gasUsed,
+    issuedBy: a.label,
+    items: signedList,
+  };
+}
+
 const verify = (ctx, credential, opts) => verifyCredential(ctx.reader, credential, opts);
 
 /** Chronological audit trail rebuilt purely from on-chain events. */
@@ -121,4 +152,4 @@ async function networkSnapshot(ctx) {
   };
 }
 
-module.exports = { exec, issueRecord, revokeRecord, verify, auditLog, networkSnapshot, revertName };
+module.exports = { exec, issueRecord, issueBatchRecords, revokeRecord, verify, auditLog, networkSnapshot, revertName };

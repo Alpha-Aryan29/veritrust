@@ -35,13 +35,33 @@ function compile() {
 
 const idOf = (key) => ethers.encodeBytes32String(key);
 
-async function startChain() {
+const DATA_DIR = path.join(__dirname, '..', '.data');
+const GANACHE_DIR = path.join(DATA_DIR, 'ganache');
+const META_FILE = path.join(DATA_DIR, 'deployment.json');
+
+async function startChain({ persist = false } = {}) {
+  const isReset = process.env.RESET === '1' || process.env.RESET === 'true';
+  const shouldPersist = persist && !isReset;
+
+  if (isReset && fs.existsSync(DATA_DIR)) {
+    try {
+      fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    } catch (_) {}
+  }
+
   const { abi, bytecode } = compile();
-  const raw = ganache.provider({
+  const ganacheOpts = {
     wallet: { mnemonic: DEMO_MNEMONIC, totalAccounts: 10 },
     chain: { chainId: 1337, hardfork: 'shanghai' },
     logging: { quiet: true },
-  });
+  };
+
+  if (shouldPersist) {
+    if (!fs.existsSync(GANACHE_DIR)) fs.mkdirSync(GANACHE_DIR, { recursive: true });
+    ganacheOpts.database = { dbPath: GANACHE_DIR };
+  }
+
+  const raw = ganache.provider(ganacheOpts);
   const provider = new ethers.BrowserProvider(raw, 1337);
   const wallet = (i) =>
     new ethers.NonceManager(
@@ -60,24 +80,49 @@ async function startChain() {
   };
   for (const a of Object.values(actors)) a.address = await a.wallet.getAddress();
 
-  const factory = new ethers.ContractFactory(abi, bytecode, actors.registrar.wallet);
-  const deployed = await factory.deploy();
-  await deployed.waitForDeployment();
-  const address = await deployed.getAddress();
+  let address;
+  let hasExistingContract = false;
+
+  if (shouldPersist && fs.existsSync(META_FILE)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(META_FILE, 'utf8'));
+      if (meta.address) {
+        const code = await provider.getCode(meta.address);
+        if (code && code !== '0x') {
+          address = meta.address;
+          hasExistingContract = true;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (!hasExistingContract) {
+    const factory = new ethers.ContractFactory(abi, bytecode, actors.registrar.wallet);
+    const deployed = await factory.deploy();
+    await deployed.waitForDeployment();
+    address = await deployed.getAddress();
+
+    if (shouldPersist) {
+      fs.writeFileSync(META_FILE, JSON.stringify({ address, deployedAt: new Date().toISOString() }, null, 2));
+    }
+  }
 
   // Read-only handle: verifiers never need a key or a connection to an issuer.
   const reader = new ethers.Contract(address, abi, provider);
   const as = (actor) => new ethers.Contract(address, abi, actors[actor].wallet);
 
-  // Seed the trust network.
   const institutions = {
     SIT: { name: 'Sahyadri Institute of Technology', admin: 'sitAdmin', issuers: ['sitRegistry', 'sitExam'] },
     KSU: { name: 'Konkan State University', admin: 'ksuAdmin', issuers: ['ksuRegistry'] },
   };
-  for (const [key, inst] of Object.entries(institutions)) {
-    await (await as('registrar').registerInstitution(idOf(key), inst.name, actors[inst.admin].address)).wait();
-    for (const issuer of inst.issuers) {
-      await (await as(inst.admin).addIssuer(idOf(key), actors[issuer].address)).wait();
+
+  // Seed the trust network only if this is a fresh contract deployment
+  if (!hasExistingContract) {
+    for (const [key, inst] of Object.entries(institutions)) {
+      await (await as('registrar').registerInstitution(idOf(key), inst.name, actors[inst.admin].address)).wait();
+      for (const issuer of inst.issuers) {
+        await (await as(inst.admin).addIssuer(idOf(key), actors[issuer].address)).wait();
+      }
     }
   }
 

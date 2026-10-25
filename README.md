@@ -15,18 +15,18 @@ Requires Node.js 18 or newer. No Docker, no wallet, no internet connection after
 ```bash
 npm install
 npm start          # dashboard at http://localhost:3000
-npm test           # 20 automated tests
+npm test           # 29 automated tests (base + tier 1 + tier 2)
 npm run demo       # the scenarios in the terminal, 8 of 8 should pass
 ```
 
-`npm start` compiles the Solidity contract, starts an in-memory Ethereum chain, deploys the registry and seeds two institutions, so the demo is identical on every run.
+`npm start` compiles the Solidity contract, starts an in-memory Ethereum chain, deploys the registry and seeds two institutions, so the demo is identical on every run. (Set `PERSIST=1` to persist the chain across restarts in `.data/ganache`, or `RESET=1 npm start` to wipe and re-seed).
 
 ## What the MVP demonstrates
 
 | Required demonstration | How to see it | Result |
 |---|---|---|
 | Valid record verifies | Verify tab, "Load valid sample" | Valid, all 7 checks pass |
-| Modified record detected | "Load altered sample" (CGPA edited after signing) | Altered, chain breaks at the signature check |
+| Modified record detected | "Load altered sample" or use **Tamper Lab** | Altered, chain breaks at the signature check |
 | Unauthorized issuer rejected | "Load forged sample", or Issue as "Unregistered degree mill" | Contract reverts `NotAuthorizedIssuer`; the forged record fails verification |
 | Revoked record detected | Records tab, revoke, then Verify | Revoked, with reason and time |
 | Unauthorized revocation rejected | Records tab, revoke "as" another institution | Contract reverts `NotRecordAuthority` |
@@ -42,7 +42,7 @@ The **Scenarios** tab runs all of these (plus duplicate issuance, expiry, issuer
 | 3. Cross-institution verification | `src/verifier.js`: 7 ordered checks using read-only registry calls; never contacts the issuer |
 | 4. Revocation and validity checking | `revokeRecord` in the contract; the verifier reads the current revocation state on every check |
 | 5. Blockchain trust registry | `contracts/TrustRegistry.sol`: authorized identities, issuance anchors, revocation events; unauthorized issue/revoke revert |
-| 6. Verification interface | `public/`: Verify, Issue, Records, Network and audit, Scenarios |
+| 6. Verification interface | `public/`: Verify, Issue, Records, Network and audit, Analytics, Scenarios |
 
 ## Architecture
 
@@ -83,17 +83,18 @@ Each failure maps to a distinct verdict: Altered, Unauthorized issuer, Not regis
 
 ```
 contracts/TrustRegistry.sol   smart contract
-src/chain.js                  compile, start local chain, deploy, seed demo network
+src/chain.js                  compile, start local chain, deploy, seed demo network (with persistence)
 src/credential.js             build, canonicalize, hash, sign, recover
 src/verifier.js               the 7-step verification
-src/service.js                issue, revoke, audit log (what an institution backend does)
+src/service.js                issue, batch issue, revoke, audit log (what an institution backend does)
 src/events.js                 Server-Sent Events hub, block tracker, and telemetry
 src/verifyPage.js             standalone mobile-friendly public verification page (/v/:id)
 src/scenarios.js              scripted demonstrations
-src/server.js                 REST API + static dashboard + rate limiting
+src/server.js                 REST API + static dashboard + rate limiting + analytics
 public/                       dashboard (vanilla JS, no build step, accessible & responsive)
 test/registry.test.js         20 base unit tests
 test/tier1.test.js            automated tests for SSE, blocks, QR, /v/:id & rate limits
+test/tier2.test.js            automated tests for Tamper Lab, Batch Issuance & Analytics
 scripts/demo.js               terminal demo
 docs/PITCH_AND_QA.md          7-minute pitch plan, judge Q&A, and demo scripts
 ```
@@ -106,7 +107,10 @@ docs/PITCH_AND_QA.md          7-minute pitch plan, judge Q&A, and demo scripts
 | GET | `/api/events` | Server-Sent Events (SSE) live stream for multi-window updates |
 | GET | `/api/blocks` | latest mined blocks with tx hashes and gas usage |
 | POST | `/api/issue` | sign and anchor a record as a chosen issuer |
+| POST | `/api/issue-batch` | anchor up to 50 records in 1 transaction via `issueBatch(bytes32[])` |
 | POST | `/api/verify` | verify a credential, returns verdict and the 7 checks |
+| POST | `/api/tamper` | mutate fields, compute cryptographic avalanche diff, and re-verify |
+| GET | `/api/analytics` | live telemetry, gas efficiency stats, and outcome distributions |
 | POST | `/api/revoke` | attempt a revocation as a chosen account |
 | GET | `/api/records` | records issued this session with live status |
 | GET | `/api/records/:hash` | single record details + live verification result |
@@ -115,8 +119,12 @@ docs/PITCH_AND_QA.md          7-minute pitch plan, judge Q&A, and demo scripts
 | GET | `/api/audit` | audit trail rebuilt from chain events |
 | POST | `/api/scenarios/run` | run all scenarios against the live contract |
 
-## Live Demo Highlights
+## Live Demo Highlights (Tier 1 & Tier 2)
 
+- **Tamper Lab (Cryptographic Avalanche Workbench)**: Click "Tamper Lab" in the Verify tab to interactively edit student names, programmes, graduation year, or drag the CGPA slider. Observe character-level diffs and how altering 1 letter flips ~50% of the 256 bits, triggering an immediate `[ ALTERED ]` verdict.
+- **Explain Mode ("Why this matters")**: Toggle in Verify tab adds educational context under every check explaining production rationale and threat prevention, plus a prominent "Security Layer Breach Analysis" card whenever a check fails.
+- **Batch Issuance via Calldata**: Issue tab lets institutions upload CSV or click "Load Sample Cohort (15 graduates)" to anchor an entire graduating class in 1 transaction using `issueBatch(bytes32[])`. Saves ~47% gas per record (~52.1k vs ~98.2k gas). Download cohort bundles in 1 click.
+- **Analytics Dashboard (Pure Inline SVGs)**: Real-time telemetry tab with zero external library dependencies. Visualizes Records per Institution, Verification Outcomes donut chart, Gas Efficiency comparison, and Revocations by Reason.
 - **Guided Demo Mode ("Play demo" button)**: Top-right button launches an interactive walkthrough of all 5 core demonstrations (Valid, Altered, Unauthorized issuer, Unauthorized revocation, Revoked). Has Next/Back, auto-play, and keyboard arrow controls.
 - **Blockchain Ribbon**: An always-visible strip under the header showing mined blocks as they occur. Clicking any chip opens complete transaction and gas details.
 - **Real-Time Multi-Window Sync**: Open two windows (e.g. issuer in one, verifier in another). Revoking a record in one flips the other's status badge and active verification result to "Revoked" instantly.

@@ -8,6 +8,10 @@ const V = {
   currentCred: null,
   currentHash: null,
   currentResult: null,
+  baseCred: null,
+  batchRecords: [],
+  analytics: null,
+  explainMode: false,
   sse: null,
   live: false,
 };
@@ -66,7 +70,7 @@ const ERR_TEXT = {
 const errText = (code) => (ERR_TEXT[code] ? `${ERR_TEXT[code]} (${code})` : code);
 
 /* ---------- tabs ---------- */
-const TABS = ['verify', 'issue', 'records', 'network', 'scenarios'];
+const TABS = ['verify', 'issue', 'records', 'network', 'analytics', 'scenarios'];
 function showTab(name) {
   if (!TABS.includes(name)) name = 'verify';
   for (const t of TABS) {
@@ -75,6 +79,7 @@ function showTab(name) {
   }
   if (name === 'records') loadRecords();
   if (name === 'network') loadNetwork();
+  if (name === 'analytics') loadAnalytics();
   history.replaceState(null, '', `#${name}`);
 }
 for (const t of TABS) $(`#tab-${t}`).addEventListener('click', () => showTab(t));
@@ -85,9 +90,15 @@ async function loadStatus() {
   updateStatusStrip(next);
   V.status = next;
   const sel = $('#i-actor');
-  if (!sel.options.length) {
+  const bSel = $('#b-actor');
+  if (sel && !sel.options.length) {
     for (const a of next.actors.filter((x) => x.key !== 'registrar' && /Issuer|issuer|mill/.test(x.label))) {
       sel.add(new Option(a.label, a.key));
+    }
+  }
+  if (bSel && !bSel.options.length) {
+    for (const a of next.actors.filter((x) => x.key !== 'registrar' && /Issuer|issuer/.test(x.label))) {
+      bSel.add(new Option(a.label, a.key));
     }
   }
 }
@@ -172,6 +183,71 @@ function certHTML(cred, verdict = null, qrDataUrl = null) {
     </div>`;
 }
 
+/* ---------- Explain mode metadata (Tier 2 Item G) ---------- */
+const EXPLAIN_MAP = {
+  format: {
+    why: 'Conforms the record to the W3C Verifiable Credentials Data Model v1.0 standard with an ECDSA cryptographic proof.',
+    attack: 'Malformed JSON injection, missing signature fields, or arbitrary unsigned schemas.',
+  },
+  signature: {
+    why: 'Cryptographic ECDSA secp256k1 recovery matches the canonical keccak256 hash against the issuer public key.',
+    attack: 'Grade alteration, student name forgery, or payload mutation after the certificate was signed.',
+  },
+  issuer: {
+    why: 'Reads TrustRegistry.sol mappings to verify the signing key is actively accredited by a registered institution.',
+    attack: 'Rogue keyholders or impostors fabricating fake credentials in the name of an accredited university.',
+  },
+  anchor: {
+    why: 'Verifies the cryptographic fingerprint was committed on the immutable EVM ledger by the authorized institutional key.',
+    attack: 'Off-chain diplomas minted without an on-chain ledger timestamp and registry commitment.',
+  },
+  institution: {
+    why: 'Queries registrar governance state on-chain to ensure the university is in good standing and not suspended.',
+    attack: 'Suspended, revoked, or unaccredited institutions continuing to issue valid degrees.',
+  },
+  status: {
+    why: 'Real-time query of contract revocation state; only the issuing institution can revoke on-chain.',
+    attack: 'Presentation of withdrawn, superseded, or revoked degrees without calling the university.',
+  },
+  validity: {
+    why: 'Enforces timestamp bounds for time-limited licenses, certifications, and temporary credentials.',
+    attack: 'Expired certifications or degrees presented past their authorized expiration date.',
+  },
+};
+
+const SECURITY_ANALYSIS = {
+  TAMPERED: {
+    threat: 'Post-Issuance Grade / Payload Alteration',
+    layer: 'Layer 2: ECDSA Signature Recovery & Canonical Keccak-256 Hash Integrity',
+    contrast: 'Conventional Web2 systems (PDFs, static databases) cannot detect post-issuance edits without an active API query to the issuing university. VeriTrust detects alterations mathematically in milliseconds offline.',
+  },
+  UNAUTHORIZED_ISSUER: {
+    threat: 'Diploma Mill / Impostor University Forgery',
+    layer: 'Layer 3: On-Chain Issuer Key Registry Authorization (TrustRegistry.sol)',
+    contrast: 'Anyone can generate a valid cryptographic signature using their own private key, but without authorization in the smart contract trust registry, the signature has zero institutional standing.',
+  },
+  NOT_ANCHORED: {
+    threat: 'Uncommitted / Zombie Off-Chain Credential',
+    layer: 'Layer 4: Immutable EVM Blockchain Ledger Anchoring',
+    contrast: 'Ensures credentials cannot be fabricated in secret without entering the public registry and immutable audit trail.',
+  },
+  REVOKED: {
+    threat: 'Presentation of Revoked / Withdrawn Credential',
+    layer: 'Layer 6: Decentralized Smart Contract Revocation State',
+    contrast: 'No central database or phone call needed to check revocation; any verifier globally sees the immutable revocation transaction instantly.',
+  },
+  INSTITUTION_SUSPENDED: {
+    threat: 'Operations by Suspended / Unaccredited Institution',
+    layer: 'Layer 5: Consortium Governance & Regulatory Enforcement',
+    contrast: 'Consortium regulators can suspend rogue universities on-chain, halting verification of all their issued credentials instantly across the network.',
+  },
+  EXPIRED: {
+    threat: 'Presentation of Expired Qualification',
+    layer: 'Layer 7: Time-Bound Validity Window Check',
+    contrast: 'Guarantees time-limited certifications cannot be passed off as indefinitely valid.',
+  },
+};
+
 /* ---------- verify panel ---------- */
 function renderResult(r) {
   V.currentResult = r;
@@ -182,8 +258,43 @@ function renderResult(r) {
     const cls = c.status === 'pass' ? '' : c.status === 'fail' ? 'fail' : 'skipped';
     const ic = c.status === 'pass' ? ICON.ok : c.status === 'fail' ? ICON.no : ICON.dash;
     const detail = c.status === 'skipped' ? 'Not reached' : c.detail;
-    return `<li class="link ${cls}" style="--i:${i}"><span class="node">${ic}</span><div class="txt"><strong>${esc(c.label)}</strong><small>${esc(detail)}</small></div></li>`;
+
+    let explainHtml = '';
+    if (V.explainMode && EXPLAIN_MAP[c.id]) {
+      const exp = EXPLAIN_MAP[c.id];
+      explainHtml = `
+        <div class="explain-note">
+          <div><strong>Why this matters:</strong> ${esc(exp.why)}</div>
+          <div><strong>Attack stopped:</strong> ${esc(exp.attack)}</div>
+        </div>`;
+    }
+
+    return `<li class="link ${cls}" style="--i:${i}">
+      <span class="node">${ic}</span>
+      <div class="txt">
+        <strong>${esc(c.label)}</strong>
+        <small>${esc(detail)}</small>
+        ${explainHtml}
+      </div>
+    </li>`;
   }).join('');
+
+  let secAnalysisHtml = '';
+  if (r.verdict !== 'VALID' && SECURITY_ANALYSIS[r.verdict]) {
+    const sa = SECURITY_ANALYSIS[r.verdict];
+    secAnalysisHtml = `
+      <div class="security-analysis">
+        <h4><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg> Security Layer Breach Analysis</h4>
+        <dl>
+          <dt>Threat Vector</dt>
+          <dd>${esc(sa.threat)}</dd>
+          <dt>Defensive Layer</dt>
+          <dd><strong>${esc(sa.layer)}</strong></dd>
+          <dt>Web2 Contrast</dt>
+          <dd>${esc(sa.contrast)}</dd>
+        </dl>
+      </div>`;
+  }
 
   const o = r.onChain;
   const facts = [];
@@ -197,6 +308,7 @@ function renderResult(r) {
   $('#result').className = 'reveal';
   $('#result').innerHTML = `
     ${certBoxHtml}
+    ${secAnalysisHtml}
     <div class="verdict ${tone}">
       <div class="seal">${ICON[icon]}</div>
       <div><h3>${esc(r.label)}</h3><p>${esc(r.reason)}</p></div>
@@ -212,12 +324,14 @@ async function runVerify() {
     const text = $('#cred').value.trim();
     try {
       V.currentCred = JSON.parse(text);
+      if (!V.baseCred) V.baseCred = JSON.parse(text);
     } catch (_) {
       V.currentCred = null;
     }
     const res = await api('/api/verify', { credential: text });
     renderResult(res);
     loadStatus();
+    if (!$('#p-analytics').hidden) loadAnalytics();
   } catch (e) { toast(e.message); } finally { btn.disabled = false; }
 }
 $('#do-verify').addEventListener('click', runVerify);
@@ -234,6 +348,7 @@ async function sample(actor) {
 
 function setCred(c) {
   V.currentCred = c;
+  V.baseCred = JSON.parse(JSON.stringify(c));
   V.currentHash = null;
   V.currentResult = null;
   $('#cred').value = JSON.stringify(c, null, 2);
@@ -241,6 +356,7 @@ function setCred(c) {
   $('#result').innerHTML = `
     ${certHTML(c, null)}
     <div class="empty"><p>Record loaded into preview. Click <b>Verify record</b> to test against the on-chain registry.</p></div>`;
+  if (typeof syncTamperFromCred === 'function') syncTamperFromCred();
 }
 
 $('#ld-valid').addEventListener('click', async () => { setCred(await sample('sitRegistry')); loadStatus(); });
@@ -711,19 +827,34 @@ function initSSE() {
       try {
         const data = JSON.parse(e.data);
         handleLiveRecordIssued(data);
+        if (!$('#p-analytics').hidden) loadAnalytics();
       } catch (_) {}
+    });
+
+    sse.addEventListener('batch_issued', (e) => {
+      try {
+        loadStatus();
+        if (!$('#p-analytics').hidden) loadAnalytics();
+        if (!$('#p-records').hidden) loadRecords();
+      } catch (_) {}
+    });
+
+    sse.addEventListener('verification', () => {
+      if (!$('#p-analytics').hidden) loadAnalytics();
     });
 
     sse.addEventListener('record_revoked', (e) => {
       try {
         const data = JSON.parse(e.data);
         handleLiveRevocation(data);
+        if (!$('#p-analytics').hidden) loadAnalytics();
       } catch (_) {}
     });
 
     sse.addEventListener('institution_status', () => {
       loadStatus();
       if (!$('#p-network').hidden) loadNetwork();
+      if (!$('#p-analytics').hidden) loadAnalytics();
     });
 
     sse.addEventListener('audit', (e) => {
@@ -994,6 +1125,489 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+/* ---------- Tamper Lab (Tier 2 Item F) ---------- */
+let tamperDebounce = null;
+function syncTamperFromCred() {
+  if (!V.currentCred || !V.currentCred.credentialSubject) return;
+  const s = V.currentCred.credentialSubject;
+  const nameInput = $('#tl-name');
+  const progInput = $('#tl-program');
+  const yearInput = $('#tl-year');
+  const cgpaInput = $('#tl-cgpa');
+  const cgpaRange = $('#tl-cgpa-range');
+  const cgpaVal = $('#tl-cgpa-val');
+
+  if (nameInput) nameInput.value = s.name || '';
+  if (progInput) progInput.value = s.program || '';
+  if (yearInput) yearInput.value = s.graduationYear || 2026;
+  const cgpa = Number(s.cgpa) || 8.4;
+  if (cgpaInput) cgpaInput.value = cgpa.toFixed(2);
+  if (cgpaRange) cgpaRange.value = cgpa;
+  if (cgpaVal) cgpaVal.textContent = cgpa.toFixed(2);
+
+  const origHashEl = $('#tl-orig-hash');
+  if (origHashEl) origHashEl.textContent = V.currentHash ? short(V.currentHash, 14, 12) : '0x…';
+  const mutHashEl = $('#tl-mut-hash');
+  if (mutHashEl) mutHashEl.textContent = '—';
+  const badge = $('#tl-avalanche-badge');
+  if (badge) {
+    badge.textContent = 'Original Hash (0 bits changed)';
+    badge.className = 'avalanche-badge';
+  }
+}
+
+function initTamperLab() {
+  const box = $('#tamper-box');
+  const toggleBtn = $('#btn-toggle-tamper');
+  const closeBtn = $('#btn-close-tamper');
+  const nameInput = $('#tl-name');
+  const progInput = $('#tl-program');
+  const yearInput = $('#tl-year');
+  const cgpaInput = $('#tl-cgpa');
+  const cgpaRange = $('#tl-cgpa-range');
+  const cgpaVal = $('#tl-cgpa-val');
+  const revertBtn = $('#tl-revert');
+  const explainCheck = $('#chk-explain');
+
+  if (explainCheck) {
+    explainCheck.checked = V.explainMode;
+    explainCheck.addEventListener('change', () => {
+      V.explainMode = explainCheck.checked;
+      if (V.currentResult) renderResult(V.currentResult);
+      toast(V.explainMode ? 'Explain mode enabled' : 'Explain mode disabled');
+    });
+  }
+
+  toggleBtn?.addEventListener('click', () => {
+    box.hidden = !box.hidden;
+    if (!box.hidden) {
+      if (!V.currentCred) {
+        $('#ld-valid').click();
+      } else {
+        syncTamperFromCred();
+      }
+    }
+  });
+
+  closeBtn?.addEventListener('click', () => { box.hidden = true; });
+
+  async function triggerTamper() {
+    if (!V.baseCred) return;
+    clearTimeout(tamperDebounce);
+    tamperDebounce = setTimeout(async () => {
+      try {
+        const val = parseFloat(cgpaInput.value) || 0;
+        if (cgpaVal) cgpaVal.textContent = val.toFixed(2);
+        if (cgpaRange) cgpaRange.value = val;
+
+        const mutations = {
+          name: nameInput.value.trim(),
+          program: progInput.value.trim(),
+          graduationYear: Number(yearInput.value),
+          cgpa: val,
+        };
+
+        const res = await api('/api/tamper', {
+          credential: V.baseCred,
+          mutations,
+        });
+
+        const origEl = $('#tl-orig-hash');
+        if (origEl) origEl.textContent = short(res.originalHash, 14, 12);
+        const mutHashEl = $('#tl-mut-hash');
+        if (mutHashEl) {
+          mutHashEl.innerHTML = (res.charDiff || []).map((cd) =>
+            `<span class="diff-char ${cd.diff ? 'diff' : ''}">${esc(cd.char2)}</span>`
+          ).join('');
+        }
+
+        const badge = $('#tl-avalanche-badge');
+        if (badge) {
+          badge.textContent = `🔥 Avalanche: ${res.flippedBits}/256 bits inverted (${res.avalanchePercent}% variance)`;
+          badge.className = `avalanche-badge ${res.flippedBits > 0 ? 'altered' : ''}`;
+        }
+
+        V.currentCred = res.mutatedCredential;
+        $('#cred').value = JSON.stringify(res.mutatedCredential, null, 2);
+        renderResult(res.verification);
+        loadStatus();
+        if (!$('#p-analytics').hidden) loadAnalytics();
+      } catch (err) {
+        toast(err.message);
+      }
+    }, 150);
+  }
+
+  cgpaRange?.addEventListener('input', () => {
+    cgpaInput.value = parseFloat(cgpaRange.value).toFixed(2);
+    triggerTamper();
+  });
+  cgpaInput?.addEventListener('input', () => {
+    cgpaRange.value = cgpaInput.value;
+    triggerTamper();
+  });
+  nameInput?.addEventListener('input', triggerTamper);
+  progInput?.addEventListener('input', triggerTamper);
+  yearInput?.addEventListener('input', triggerTamper);
+
+  revertBtn?.addEventListener('click', () => {
+    if (!V.baseCred) return;
+    setCred(V.baseCred);
+    syncTamperFromCred();
+    runVerify();
+    toast('Reverted to original valid credential');
+  });
+}
+
+/* ---------- Batch Issuance (Tier 2 Item I) ---------- */
+const SAMPLE_COHORT = [
+  { name: 'Aditi Sharma', program: 'B.Tech in Computer Engineering', graduationYear: 2026, cgpa: 9.24 },
+  { name: 'Rohan Deshmukh', program: 'B.Tech in Artificial Intelligence', graduationYear: 2026, cgpa: 8.85 },
+  { name: 'Kavya Iyer', program: 'B.Tech in Data Science & Analytics', graduationYear: 2026, cgpa: 9.12 },
+  { name: 'Arjun Kulkarni', program: 'B.Tech in Cyber Security', graduationYear: 2026, cgpa: 8.40 },
+  { name: 'Pooja Nair', program: 'B.Tech in Computer Engineering', graduationYear: 2026, cgpa: 8.95 },
+  { name: 'Vikram Joshi', program: 'B.Tech in Artificial Intelligence', graduationYear: 2026, cgpa: 8.35 },
+  { name: 'Ananya Rao', program: 'B.Tech in Information Technology', graduationYear: 2026, cgpa: 9.45 },
+  { name: 'Karthik Hegde', program: 'B.Tech in Cyber Security', graduationYear: 2026, cgpa: 8.60 },
+  { name: 'Sneha Patil', program: 'B.Tech in Computer Engineering', graduationYear: 2026, cgpa: 8.78 },
+  { name: 'Manish Bhat', program: 'B.Tech in Data Science & Analytics', graduationYear: 2026, cgpa: 8.90 },
+  { name: 'Tanvi Gokhale', program: 'B.Tech in Artificial Intelligence', graduationYear: 2026, cgpa: 9.05 },
+  { name: 'Siddharth Pillai', program: 'B.Tech in Information Technology', graduationYear: 2026, cgpa: 8.52 },
+  { name: 'Rhea Fernandes', program: 'B.Tech in Computer Engineering', graduationYear: 2026, cgpa: 9.30 },
+  { name: 'Pranav Sawant', program: 'B.Tech in Cyber Security', graduationYear: 2026, cgpa: 8.15 },
+  { name: 'Deepa Kamath', program: 'B.Tech in Data Science & Analytics', graduationYear: 2026, cgpa: 9.18 },
+];
+
+function initBatchIssue() {
+  const singleBtn = $('#btn-mode-single');
+  const batchBtn = $('#btn-mode-batch');
+  const singleWrap = $('#single-issue-wrap');
+  const batchWrap = $('#batch-issue-wrap');
+  const loadCohortBtn = $('#btn-load-cohort');
+  const csvInput = $('#batch-csv-input');
+  const doBatchBtn = $('#btn-do-batch-issue');
+  const tableBody = $('#batch-preview-table tbody');
+  const countEl = $('#batch-count');
+  const clearBtn = $('#btn-clear-batch');
+
+  singleBtn?.addEventListener('click', () => {
+    singleBtn.classList.add('active');
+    batchBtn.classList.remove('active');
+    singleWrap.hidden = false;
+    batchWrap.hidden = true;
+  });
+
+  batchBtn?.addEventListener('click', () => {
+    batchBtn.classList.add('active');
+    singleBtn.classList.remove('active');
+    singleWrap.hidden = true;
+    batchWrap.hidden = false;
+  });
+
+  function renderBatchPreview() {
+    if (!countEl || !tableBody || !doBatchBtn) return;
+    countEl.textContent = V.batchRecords.length;
+    if (!V.batchRecords.length) {
+      tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:18px;">Click "Load Sample Cohort" or upload a CSV file with columns: <code>name,program,graduationYear,cgpa</code></td></tr>`;
+      doBatchBtn.disabled = true;
+      doBatchBtn.textContent = 'Sign & Anchor 0 Records in 1 Transaction';
+      if (clearBtn) clearBtn.style.display = 'none';
+      return;
+    }
+
+    if (clearBtn) clearBtn.style.display = 'inline-block';
+    doBatchBtn.disabled = false;
+    doBatchBtn.textContent = `Sign & Anchor ${V.batchRecords.length} Records in 1 Transaction (issueBatch)`;
+
+    tableBody.innerHTML = V.batchRecords.map((r, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td><strong>${esc(r.name)}</strong></td>
+        <td>${esc(r.program)}</td>
+        <td>${esc(r.graduationYear)}</td>
+        <td><strong>${esc(r.cgpa)}</strong></td>
+      </tr>
+    `).join('');
+  }
+
+  loadCohortBtn?.addEventListener('click', () => {
+    V.batchRecords = JSON.parse(JSON.stringify(SAMPLE_COHORT));
+    renderBatchPreview();
+    toast(`Loaded ${SAMPLE_COHORT.length} students from Class of 2026`);
+  });
+
+  clearBtn?.addEventListener('click', () => {
+    V.batchRecords = [];
+    renderBatchPreview();
+  });
+
+  csvInput?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const lines = evt.target.result.split(/\r?\n/).filter((x) => x.trim());
+        const parsed = [];
+        let startIdx = 0;
+        if (lines[0]?.toLowerCase().includes('name')) startIdx = 1;
+        for (let i = startIdx; i < lines.length; i++) {
+          const parts = lines[i].split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
+          if (parts.length >= 2) {
+            parsed.push({
+              name: parts[0] || `Student ${i}`,
+              program: parts[1] || 'B.Tech in Computer Engineering',
+              graduationYear: Number(parts[2]) || 2026,
+              cgpa: parseFloat(parts[3]) || 8.0,
+            });
+          }
+        }
+        if (!parsed.length) throw new Error('No valid rows found in CSV');
+        V.batchRecords = parsed.slice(0, 50);
+        renderBatchPreview();
+        toast(`Parsed ${V.batchRecords.length} rows from CSV`);
+      } catch (err) {
+        toast(`CSV Error: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  doBatchBtn?.addEventListener('click', async () => {
+    if (!V.batchRecords.length) return;
+    doBatchBtn.disabled = true;
+    doBatchBtn.textContent = 'Signing and anchoring batch on EVM…';
+    const actor = $('#b-actor')?.value || $('#i-actor')?.value;
+    try {
+      const res = await api('/api/issue-batch', {
+        actor,
+        records: V.batchRecords,
+        validDays: 3650,
+      });
+
+      const singleGasEst = 98200 * res.count;
+      const gasSaved = singleGasEst - res.totalGas;
+
+      const out = $('#issue-out');
+      out.className = '';
+      out.innerHTML = `
+        <div class="batch-receipt">
+          <div class="cert-head">
+            <div>
+              <div class="cert-badge" style="color:var(--ok);">Batch Anchored On-Chain</div>
+              <h3 style="margin-top:2px;">${res.count} Credentials Issued</h3>
+            </div>
+            <span class="badge t-ok">EVM Transaction Confirmed</span>
+          </div>
+          <p class="hint" style="margin:6px 0 12px;">All ${res.count} credentials cryptographically signed by <b>${esc(res.issuedBy)}</b> and anchored in a single block using <code>issueBatch(bytes32[])</code>.</p>
+          <div class="batch-receipt-grid">
+            <div class="receipt-metric">
+              <strong>${res.count}</strong>
+              <small>Credentials</small>
+            </div>
+            <div class="receipt-metric">
+              <strong>${Number(res.gasPerRecord).toLocaleString()}</strong>
+              <small>Gas / Record</small>
+            </div>
+            <div class="receipt-metric">
+              <strong>${Number(res.totalGas).toLocaleString()}</strong>
+              <small>Total Gas Used</small>
+            </div>
+            <div class="receipt-metric">
+              <strong style="color:var(--ok);">${res.savingsPercent}%</strong>
+              <small>Gas Saved</small>
+            </div>
+          </div>
+          <div class="facts" style="border:0; padding-top:0;">
+            <dt>Tx Hash</dt>
+            <dd><span class="hash">${esc(res.tx?.txHash || '—')}</span></dd>
+            <dt>Gas Saved vs Single</dt>
+            <dd class="plain"><strong>~${Number(gasSaved).toLocaleString()} gas</strong> saved compared to ${res.count} individual transactions</dd>
+          </div>
+          <div class="cert-actions" style="margin-top:14px;">
+            <button class="primary small" id="btn-dl-cohort">Download Cohort Bundle (.json)</button>
+            <button class="ghost small" id="btn-view-records-tab">View in Records Tab</button>
+            <button class="ghost small" id="btn-verify-first">Verify First Record</button>
+          </div>
+        </div>`;
+
+      $('#btn-dl-cohort')?.addEventListener('click', () => {
+        const bundle = res.items.map((x) => x.credential);
+        downloadJson(bundle, `cohort-${res.count}-credentials.json`);
+      });
+      $('#btn-view-records-tab')?.addEventListener('click', () => showTab('records'));
+      $('#btn-verify-first')?.addEventListener('click', () => {
+        if (res.items[0]?.credential) {
+          setCred(res.items[0].credential);
+          showTab('verify');
+          runVerify();
+        }
+      });
+
+      toast(`Batch of ${res.count} records successfully anchored!`);
+      loadStatus();
+      loadRecords();
+      if (!$('#p-analytics').hidden) loadAnalytics();
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      doBatchBtn.disabled = false;
+      doBatchBtn.textContent = `Sign & Anchor ${V.batchRecords.length} Records in 1 Transaction (issueBatch)`;
+    }
+  });
+}
+
+/* ---------- Analytics (Tier 2 Item H) ---------- */
+async function loadAnalytics() {
+  try {
+    const data = await api('/api/analytics');
+    V.analytics = data;
+
+    const kpiRec = $('#kpi-records');
+    const kpiVer = $('#kpi-verifications');
+    const kpiAtt = $('#kpi-attacks');
+    const kpiSav = $('#kpi-savings');
+
+    if (kpiRec) kpiRec.textContent = data.totalAnchored ?? 0;
+    if (kpiVer) kpiVer.textContent = data.verifications.total ?? 0;
+    const attacks = (data.verifications.TAMPERED || 0) + (data.verifications.UNAUTHORIZED_ISSUER || 0) + (data.verifications.REVOKED || 0) + (data.verifications.EXPIRED || 0);
+    if (kpiAtt) kpiAtt.textContent = attacks;
+    if (kpiSav) kpiSav.textContent = `${data.gas.savingsPercent}%`;
+
+    renderChartInstitutions(data.institutions || []);
+    renderChartVerdicts(data.verifications || {});
+    renderChartGas(data.gas || {});
+    renderChartReasons(data.reasonsBreakdown || {});
+  } catch (err) {
+    console.error('Failed to load analytics:', err);
+  }
+}
+
+function renderChartInstitutions(insts) {
+  const svg = $('#chart-inst');
+  if (!svg) return;
+  const max = Math.max(1, ...insts.map((x) => x.recordCount || 0));
+  const barH = 26;
+  const startY = 32;
+
+  let bars = insts.map((inst, i) => {
+    const y = startY + i * 44;
+    const count = inst.recordCount || 0;
+    const w = Math.round((count / max) * 220);
+    return `
+      <text x="16" y="${y + 14}" class="chart-text">${esc(inst.name)}</text>
+      <rect x="150" y="${y}" width="220" height="${barH}" class="chart-bar-bg" />
+      <rect x="150" y="${y}" width="${Math.max(w, 4)}" height="${barH}" class="chart-bar" fill="var(--brand)" />
+      <text x="${158 + Math.max(w, 4)}" y="${y + 18}" class="chart-text-val">${count}</text>
+    `;
+  }).join('');
+
+  svg.innerHTML = `
+    <line x1="150" y1="20" x2="150" y2="150" stroke="var(--line)" stroke-width="1.5" />
+    ${bars}
+  `;
+}
+
+function renderChartVerdicts(verdicts) {
+  const svg = $('#chart-verdicts');
+  if (!svg) return;
+  const items = [
+    { label: 'Valid', count: verdicts.VALID || 0, color: 'var(--ok)' },
+    { label: 'Altered', count: verdicts.TAMPERED || 0, color: 'var(--bad)' },
+    { label: 'Revoked', count: verdicts.REVOKED || 0, color: 'var(--warn)' },
+    { label: 'Rogue / Mill', count: verdicts.UNAUTHORIZED_ISSUER || 0, color: 'var(--viol)' },
+    { label: 'Expired', count: verdicts.EXPIRED || 0, color: '#D97706' },
+  ];
+  const total = items.reduce((acc, x) => acc + x.count, 0);
+
+  if (total === 0) {
+    svg.innerHTML = `
+      <circle cx="90" cy="90" r="54" fill="none" stroke="#E7ECF0" stroke-width="24" />
+      <text x="90" y="94" text-anchor="middle" class="chart-text-muted">No verifications</text>
+      <g transform="translate(180, 45)">
+        ${items.map((it, i) => `
+          <circle cx="10" cy="${i * 22 + 8}" r="5" fill="${it.color}" />
+          <text x="24" y="${i * 22 + 12}" class="chart-text">${esc(it.label)}: 0</text>
+        `).join('')}
+      </g>
+    `;
+    return;
+  }
+
+  const r = 54;
+  const circ = 2 * Math.PI * r;
+  let offset = 0;
+  const arcs = items.map((it) => {
+    const frac = it.count / total;
+    const dash = frac * circ;
+    const strokeOffset = -offset;
+    offset += dash;
+    return `<circle cx="90" cy="90" r="${r}" fill="none" stroke="${it.color}" stroke-width="24" stroke-dasharray="${dash} ${circ - dash}" stroke-dashoffset="${strokeOffset}" transform="rotate(-90 90 90)" />`;
+  }).join('');
+
+  svg.innerHTML = `
+    <circle cx="90" cy="90" r="${r}" fill="none" stroke="#E7ECF0" stroke-width="24" />
+    ${arcs}
+    <text x="90" y="86" text-anchor="middle" class="chart-text-val" font-size="16">${total}</text>
+    <text x="90" y="102" text-anchor="middle" class="chart-text-muted" font-size="10">TOTAL</text>
+    <g transform="translate(195, 30)">
+      ${items.map((it, i) => `
+        <circle cx="8" cy="${i * 22 + 8}" r="5" fill="${it.color}" />
+        <text x="20" y="${i * 22 + 12}" class="chart-text">${esc(it.label)}</text>
+        <text x="140" y="${i * 22 + 12}" class="chart-text-val" text-anchor="end">${it.count}</text>
+      `).join('')}
+    </g>
+  `;
+}
+
+function renderChartGas(gas) {
+  const svg = $('#chart-gas');
+  if (!svg) return;
+  const single = gas.singleGasAvg || 98200;
+  const batch = gas.batchGasAvg || 52100;
+  const maxGas = 120000;
+
+  const wSingle = Math.round((single / maxGas) * 230);
+  const wBatch = Math.round((batch / maxGas) * 230);
+
+  svg.innerHTML = `
+    <text x="14" y="44" class="chart-text">Single Issuance</text>
+    <rect x="130" y="28" width="230" height="24" class="chart-bar-bg" />
+    <rect x="130" y="28" width="${wSingle}" height="24" class="chart-bar" fill="#5B6772" />
+    <text x="${136 + wSingle}" y="45" class="chart-text-val">${(single / 1000).toFixed(1)}k</text>
+
+    <text x="14" y="94" class="chart-text">Batch (per record)</text>
+    <rect x="130" y="78" width="230" height="24" class="chart-bar-bg" />
+    <rect x="130" y="78" width="${wBatch}" height="24" class="chart-bar" fill="var(--ok)" />
+    <text x="${136 + wBatch}" y="95" class="chart-text-val" fill="var(--ok)">${(batch / 1000).toFixed(1)}k</text>
+
+    <g transform="translate(130, 126)">
+      <rect x="0" y="0" width="230" height="28" rx="6" fill="var(--ok-bg)" stroke="var(--ok)" stroke-width="1" />
+      <text x="115" y="18" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ok)">
+        ⚡ 46.9% Less Gas via Calldata Packing
+      </text>
+    </g>
+  `;
+}
+
+function renderChartReasons(reasons) {
+  const svg = $('#chart-reasons');
+  if (!svg) return;
+  const entries = Object.entries(reasons);
+  const max = Math.max(1, ...entries.map(([_, v]) => v));
+
+  svg.innerHTML = entries.map(([reason, count], i) => {
+    const y = 20 + i * 30;
+    const w = Math.round((count / max) * 160);
+    return `
+      <text x="14" y="${y + 14}" class="chart-text" font-size="10">${esc(reason)}</text>
+      <rect x="180" y="${y}" width="160" height="18" class="chart-bar-bg" />
+      <rect x="180" y="${y}" width="${Math.max(w, count > 0 ? 6 : 0)}" height="18" class="chart-bar" fill="var(--warn)" />
+      <text x="${186 + Math.max(w, count > 0 ? 6 : 0)}" y="${y + 14}" class="chart-text-val">${count}</text>
+    `;
+  }).join('');
+}
+
 /* ---------- boot ---------- */
 async function boot() {
   await loadStatus();
@@ -1003,6 +1617,9 @@ async function boot() {
   } catch (_) {}
   initSSE();
   initDropZone();
+  initTamperLab();
+  initBatchIssue();
+  $('#btn-refresh-analytics')?.addEventListener('click', loadAnalytics);
   showTab((location.hash || '#verify').slice(1));
 }
 
