@@ -12,7 +12,21 @@ const { renderVerifyHtml } = require('./verifyPage');
 const { hashCredential } = require('./credential');
 
 const PORT = Number(process.env.PORT) || 3000;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
 const clip = (v, n = 120) => String(v ?? '').slice(0, n);
+const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+const allowedOrigins = new Set(
+  CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
+);
+allowedOrigins.add(`http://localhost:${PORT}`);
+allowedOrigins.add(`http://127.0.0.1:${PORT}`);
+const boundedNumber = (value, { min, max, fallback, integer = false }) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const normalized = integer ? Math.trunc(parsed) : parsed;
+  if (normalized < min || normalized > max) throw new Error(`Numeric value must be between ${min} and ${max}`);
+  return normalized;
+};
 
 function computeAvalanche(h1, h2) {
   try {
@@ -119,6 +133,34 @@ async function createApp() {
   const apiLimiter = rateLimit({ windowMs: 60000, max: 200 });
 
   app.use(express.json({ limit: '512kb' }));
+  // Security headers and narrowly scoped CORS for the separately hosted dev UI.
+  const fs = require('fs');
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://localhost:3001 http://127.0.0.1:3001");
+    res.setHeader('Cache-Control', req.path.startsWith('/api/') ? 'no-store' : 'no-cache');
+
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.has(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    } else if (origin && req.path.startsWith('/api/')) {
+      return res.status(403).json({ error: 'Origin is not allowed' });
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+
+  const atelierOut = path.join(__dirname, '..', 'atelier-ui-codrops-main', 'out');
+  if (fs.existsSync(atelierOut)) {
+    app.use(express.static(atelierOut));
+  }
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   const wrap = (fn) => (req, res) =>
@@ -140,11 +182,12 @@ async function createApp() {
     const s = {
       name: clip(subject.name, 80) || 'Unnamed Student',
       program: clip(subject.program, 120) || 'B.Tech',
-      graduationYear: Number(subject.graduationYear) || new Date().getFullYear(),
-      cgpa: Number(subject.cgpa) || 0,
+      graduationYear: boundedNumber(subject.graduationYear, { min: 1900, max: 2200, fallback: new Date().getFullYear(), integer: true }),
+      cgpa: boundedNumber(subject.cgpa, { min: 0, max: 10, fallback: 0 }),
     };
     const days = validDays === null || validDays === '' || validDays === undefined ? null : Number(validDays);
-    const r = await svc.issueRecord(ctx, { actor, subject: s, validDays: Number.isFinite(days) ? days : null });
+    const normalizedDays = days === null ? null : boundedNumber(days, { min: -36500, max: 36500, fallback: null, integer: true });
+    const r = await svc.issueRecord(ctx, { actor, subject: s, validDays: normalizedDays });
     const entry = {
       recordHash: r.recordHash,
       credential: r.credential,
@@ -173,16 +216,16 @@ async function createApp() {
     const sanitized = records.map((s, idx) => ({
       name: clip(s.name, 80) || `Student ${idx + 1}`,
       program: clip(s.program, 120) || 'B.Tech in Computer Engineering',
-      graduationYear: Number(s.graduationYear) || new Date().getFullYear(),
-      cgpa: Number(s.cgpa) || 8.0,
+      graduationYear: boundedNumber(s.graduationYear, { min: 1900, max: 2200, fallback: new Date().getFullYear(), integer: true }),
+      cgpa: boundedNumber(s.cgpa, { min: 0, max: 10, fallback: 8.0 }),
     }));
 
     const days = validDays === null || validDays === '' || validDays === undefined ? null : Number(validDays);
     const result = await svc.issueBatchRecords(ctx, {
       actor,
       records: sanitized,
-      type,
-      validDays: Number.isFinite(days) ? days : null,
+      type: clip(type, 64),
+      validDays: days === null ? null : boundedNumber(days, { min: -36500, max: 36500, fallback: null, integer: true }),
     });
 
     const now = Date.now();
@@ -390,6 +433,7 @@ async function createApp() {
   // Single record details + live verification
   app.get('/api/records/:hash', apiLimiter, wrap(async (req, res) => {
     const hash = req.params.hash;
+    if (!HASH_RE.test(hash || '')) throw new Error('Invalid record hash');
     const found = issued.find((x) => x.recordHash.toLowerCase() === hash.toLowerCase());
     const rec = await ctx.reader.getRecord(hash);
     if (!found && !rec.exists) {
@@ -421,6 +465,7 @@ async function createApp() {
   app.get('/api/qr', apiLimiter, wrap(async (req, res) => {
     const text = String(req.query.text || '');
     if (!text) throw new Error('Missing text query parameter');
+    if (text.length > 2048) throw new Error('QR payload is too long');
     const dataUrl = await QRCode.toDataURL(text, {
       errorCorrectionLevel: 'M',
       width: 280,
@@ -434,6 +479,7 @@ async function createApp() {
   app.get('/v/:id', wrap(async (req, res) => {
     const id = req.params.id;
     const found = issued.find((x) => x.recordHash.toLowerCase() === id.toLowerCase() || x.credential?.id === id);
+    if (!found && !HASH_RE.test(id || '')) return res.status(400).send('Invalid record identifier');
     const rec = await ctx.reader.getRecord(found?.recordHash || id);
     const inst = rec.exists ? await ctx.reader.getInstitution(rec.institutionId) : null;
     let verification = null;

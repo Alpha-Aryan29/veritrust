@@ -7,6 +7,9 @@ const QRCode = require('qrcode');
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const short = (h, a = 10, b = 8) => (h && h.length > a + b + 2 ? `${h.slice(0, a)}…${h.slice(-b)}` : h || '');
 const fmtTime = (s) => (s ? new Date(s * 1000).toLocaleString() : 'N/A');
+const safeJson = (value) => JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (char) => ({
+  '<': '\\u003c', '>': '\\u003e', '&': '\\u0026', '\u2028': '\\u2028', '\u2029': '\\u2029',
+}[char]));
 
 const ICON = {
   ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
@@ -249,7 +252,7 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
 
   ${record?.credential ? `
   <script>
-    const credData = ${JSON.stringify(record.credential)};
+    const credData = ${safeJson(record.credential)};
     document.getElementById('btn-dl-json')?.addEventListener('click', () => {
       const blob = new Blob([JSON.stringify(credData, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');

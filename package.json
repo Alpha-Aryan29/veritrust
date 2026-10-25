@@ -5,6 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "build:ui": "npm --prefix atelier-ui-codrops-main run build",
+    "dev:ui": "npm --prefix atelier-ui-codrops-main run dev",
     "demo": "node scripts/demo.js",
     "test": "node --test test/*.test.js"
   },
@@ -17,6 +19,6 @@
     "express": "^4.19.2",
     "ganache": "^7.9.2",
     "qrcode": "^1.5.4",
-    "solc": "0.8.26"
+    "solc": "^0.8.38"
   }
 }

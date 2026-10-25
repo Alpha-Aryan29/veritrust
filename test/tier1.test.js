@@ -158,3 +158,38 @@ test('Tier 1: API requests include rate limit headers and validate bodies', asyn
   const errData = await badRes.json();
   assert.ok(errData.error);
 });
+
+test('Tier 1: security headers are present and untrusted API origins are rejected', async () => {
+  const res = await fetch(`${baseUrl}/api/status`);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+  assert.match(res.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+
+  const crossOrigin = await fetch(`${baseUrl}/api/status`, {
+    headers: { Origin: 'https://attacker.invalid' },
+  });
+  assert.equal(crossOrigin.status, 403);
+  assert.equal(crossOrigin.headers.get('access-control-allow-origin'), null);
+});
+
+test('Tier 1: public verification safely serializes hostile credential text', async () => {
+  const hostileName = '</script><script>globalThis.compromised=true</script>';
+  const issueRes = await fetch(`${baseUrl}/api/issue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      actor: 'sitRegistry',
+      subject: { name: hostileName, program: 'Security Research' },
+    }),
+  });
+  assert.equal(issueRes.status, 200);
+  const issued = await issueRes.json();
+
+  const pageRes = await fetch(`${baseUrl}/v/${issued.recordHash}`);
+  const html = await pageRes.text();
+  assert.equal(pageRes.status, 200);
+  assert.equal(html.includes(hostileName), false, 'Hostile closing script tag must never be emitted verbatim');
+  assert.ok(html.includes('&lt;/script&gt;'), 'Visible credential text should be HTML escaped');
+  assert.ok(html.includes('\\u003c/script\\u003e'), 'Inline JSON should escape script delimiters');
+});

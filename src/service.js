@@ -144,9 +144,12 @@ async function networkSnapshot(ctx) {
   }
   return {
     contract: ctx.address,
+    owner: ctx.actors.registrar.address,
     block: await ctx.provider.getBlockNumber(),
     records: Number(await ctx.reader.recordCount()),
     revocations: Number(await ctx.reader.revocationCount()),
+    activeIssuers: institutions.reduce((sum, institution) => sum + institution.issuers.length, 0),
+    suspendedInstitutions: institutions.filter((institution) => !institution.active).length,
     institutions,
     actors: Object.entries(ctx.actors).map(([key, a]) => ({ key, label: a.label, address: a.address })),
   };
