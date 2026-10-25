@@ -87,12 +87,15 @@ src/chain.js                  compile, start local chain, deploy, seed demo netw
 src/credential.js             build, canonicalize, hash, sign, recover
 src/verifier.js               the 7-step verification
 src/service.js                issue, revoke, audit log (what an institution backend does)
+src/events.js                 Server-Sent Events hub, block tracker, and telemetry
+src/verifyPage.js             standalone mobile-friendly public verification page (/v/:id)
 src/scenarios.js              scripted demonstrations
-src/server.js                 REST API + static dashboard
-public/                       dashboard (no build step)
-test/registry.test.js         20 tests
+src/server.js                 REST API + static dashboard + rate limiting
+public/                       dashboard (vanilla JS, no build step, accessible & responsive)
+test/registry.test.js         20 base unit tests
+test/tier1.test.js            automated tests for SSE, blocks, QR, /v/:id & rate limits
 scripts/demo.js               terminal demo
-docs/PITCH_AND_QA.md          7-minute pitch plan and likely judge questions
+docs/PITCH_AND_QA.md          7-minute pitch plan, judge Q&A, and demo scripts
 ```
 
 ## API
@@ -100,12 +103,25 @@ docs/PITCH_AND_QA.md          7-minute pitch plan and likely judge questions
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/status` | contract address, block height, counts, institutions |
+| GET | `/api/events` | Server-Sent Events (SSE) live stream for multi-window updates |
+| GET | `/api/blocks` | latest mined blocks with tx hashes and gas usage |
 | POST | `/api/issue` | sign and anchor a record as a chosen issuer |
 | POST | `/api/verify` | verify a credential, returns verdict and the 7 checks |
 | POST | `/api/revoke` | attempt a revocation as a chosen account |
 | GET | `/api/records` | records issued this session with live status |
+| GET | `/api/records/:hash` | single record details + live verification result |
+| GET | `/api/qr?text=...` | generates offline QR code data URL (PNG) |
+| GET | `/v/:recordHash` | public mobile-friendly verification page for phone scanners |
 | GET | `/api/audit` | audit trail rebuilt from chain events |
-| POST | `/api/scenarios/run` | run all scenarios |
+| POST | `/api/scenarios/run` | run all scenarios against the live contract |
+
+## Live Demo Highlights
+
+- **Guided Demo Mode ("Play demo" button)**: Top-right button launches an interactive walkthrough of all 5 core demonstrations (Valid, Altered, Unauthorized issuer, Unauthorized revocation, Revoked). Has Next/Back, auto-play, and keyboard arrow controls.
+- **Blockchain Ribbon**: An always-visible strip under the header showing mined blocks as they occur. Clicking any chip opens complete transaction and gas details.
+- **Real-Time Multi-Window Sync**: Open two windows (e.g. issuer in one, verifier in another). Revoking a record in one flips the other's status badge and active verification result to "Revoked" instantly.
+- **QR Code & Phone Verification**: Every certificate includes a generated QR code. Anyone on the same Wi-Fi can scan the QR code with their phone camera to open `/v/:recordHash` and inspect the live 7-step chain of trust in real time.
+- **Drag-and-Drop Verification**: Drag any `.json` credential into the Verify tab to inspect and verify immediately with friendly validation checks.
 
 ## Honest limitations and next steps
 

@@ -132,3 +132,29 @@ test('Tier 1: /v/:id serves standalone verification HTML with 7 checks and QR co
   assert.ok(html.includes('data:image/png;base64,'), 'QR code embedded in page');
   assert.ok(html.includes('Record is well formed'), 'First check present');
 });
+
+test('Tier 1: /v/:id displays honest message for unknown record hashes', async () => {
+  const unknownHash = '0x' + '99'.repeat(32);
+  const res = await fetch(`${baseUrl}/v/${unknownHash}`);
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.ok(html.includes('Not registered'), 'Should state not registered');
+  assert.ok(html.includes('never anchored in this trust registry'), 'Honest explanation for unknown hash');
+});
+
+test('Tier 1: API requests include rate limit headers and validate bodies', async () => {
+  const res = await fetch(`${baseUrl}/api/status`);
+  assert.equal(res.status, 200);
+  assert.ok(res.headers.get('x-ratelimit-limit'), 'Limit header present');
+  assert.ok(res.headers.get('x-ratelimit-remaining') !== null, 'Remaining header present');
+
+  // Body validation: missing actor
+  const badRes = await fetch(`${baseUrl}/api/issue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subject: { name: 'Bad' } }),
+  });
+  assert.equal(badRes.status, 400);
+  const errData = await badRes.json();
+  assert.ok(errData.error);
+});

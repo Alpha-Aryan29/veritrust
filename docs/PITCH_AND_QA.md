@@ -14,16 +14,28 @@ Format: **7 minutes presenting, 3 minutes Q&A.** Rehearse with a timer. The live
 
 ## Live demo script (4 minutes)
 
-Have the app already running and the Verify tab open. Keep a terminal with `npm test` ready as a backup.
+Have the app already running at http://localhost:3000. Keep a terminal with `npm test` ready as a backup.
 
-1. **Valid.** Click *Load valid sample*, *Verify record*. Point at the chain: seven linked checks, all green. Say: "No call to the university was made. Only the registry was read."
-2. **Altered.** Click *Load altered sample*, *Verify*. Say: "Someone changed the CGPA from 8.4 to 9.9 after it was signed." The chain **breaks** at the signature check and the later steps show "Not reached".
-3. **Unauthorized issuer.** Go to Issue, choose *Unregistered degree mill*, submit. Show the contract rejecting it (`NotAuthorizedIssuer`). Click *Send to Verify*: "Even the forged record it signed itself is caught, at the issuer-authorization step."
-4. **Revocation.** Go to Records, pick a real record, *Revoke…* as **KSU Registrar Office** (a different institution). Show it refused (`NotRecordAuthority`). Change to the issuing office, confirm, then *Verify*: Revoked, with reason and time.
-5. **Audit.** Network and audit tab: every issuance and revocation is rebuilt from chain events.
-6. **Close with Scenarios:** *Run all scenarios*, 8 of 8.
+### Option A: Using "Play demo" (Automated / Narrated Mode)
+1. Click the **Play demo** button in the header. The floating walkthrough controller guides you through all 5 demonstrations with real transactions on the live EVM contract.
+2. Advance with **Next** (or press the **Right Arrow** key / enable **Auto-play**):
+   - **Step 1 (Valid):** Shows Sahyadri Institute's certificate with 7 green links in the chain of trust and the `[ VALID ]` stamp.
+   - **Step 2 (Altered):** Edits CGPA from 8.4 to 9.9. The chain visibly **breaks** at check 2 (signature/integrity) with later steps "Not reached".
+   - **Step 3 (Unauthorized issuer):** Unregistered degree mill attempts issuance; contract reverts `NotAuthorizedIssuer`, and its self-signed record fails check 3.
+   - **Step 4 (Unauthorized revocation):** Konkan State University tries to revoke an SIT certificate; contract reverts `NotRecordAuthority`.
+   - **Step 5 (Revoked record):** Authorized SIT key revokes the certificate; live status changes, and Verify displays `[ REVOKED ]` with reason and on-chain timestamp.
 
-If something goes wrong on stage: restart with `npm start` (takes about 3 seconds) or fall back to `npm run demo`.
+### Option B: The "Judge Phone Scan" Live Moment
+1. Go to **Issue**, issue a certificate for a student (e.g., Asha Patil).
+2. Point at the **Blockchain Ribbon**: a new block slides in with the transaction hash and gas used (~98k gas). Click the block to show the mined block details.
+3. Show the **QR code** generated on the certificate.
+4. **Invite a judge to scan the QR code with their phone** on the local Wi-Fi.
+5. The judge's phone opens `/v/:recordHash` and renders the mobile-friendly verification page with the 7-step chain of trust running live!
+6. Open a second browser window with **Records**. Click *Revoke…* as SIT on that certificate.
+7. Show that the judge's phone and the first window **instantly flip to "Revoked" without refreshing**, powered by Server-Sent Events (`/api/events`).
+
+### Backup / CLI Demo
+If something goes wrong on stage: restart with `npm start` (takes ~2 seconds) or fall back to `npm run demo` in the terminal.
 
 ## Likely judge questions and answers
 

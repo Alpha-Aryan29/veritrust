@@ -20,6 +20,7 @@
       </div>
     </div>
     <div class="header-right">
+      <button id="btn-play-demo" class="demo-btn" aria-label="Start guided pitch demo"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Play demo</button>
       <div id="live-indicator" class="live-pill" role="status" aria-label="Real-time registry stream active">
         <span class="live-dot" aria-hidden="true"></span>
         <span class="live-text" id="live-text">Live</span>
@@ -52,9 +53,25 @@
       <div class="split">
         <div class="col">
           <h2>Record to verify</h2>
-          <p class="hint">Paste a signed record, or load a sample. Verification reads the shared registry only; it never contacts the issuing institution.</p>
-          <label class="sr" for="cred">Signed record (JSON)</label>
-          <textarea id="cred" spellcheck="false" rows="18" placeholder='{ "@context": [...], "issuer": "did:ethr:0x…", "credentialSubject": {...}, "proof": {...} }'></textarea>
+          <p class="hint">Upload a signed credential file, paste JSON, or load a sample. Verification reads the shared registry only; it never contacts the issuing institution.</p>
+          
+          <!-- File drag and drop (Phase 5) -->
+          <div class="drop-zone" id="drop-zone" tabindex="0" role="button" aria-label="Drop credential .json file here or click to browse">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="drop-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <div>
+              <strong>Drag & drop credential .json file here</strong>
+              <span>or <span class="browse-link">browse file from disk</span></span>
+            </div>
+            <input type="file" id="file-input" accept=".json,application/json" class="sr">
+          </div>
+          <div id="drop-err" class="msg t-bad" hidden role="alert"></div>
+
+          <details class="raw-box" id="raw-box" open>
+            <summary>Raw record (JSON)</summary>
+            <label class="sr" for="cred">Signed record (JSON)</label>
+            <textarea id="cred" spellcheck="false" rows="12" placeholder='{ "@context": [...], "issuer": "did:ethr:0x…", "credentialSubject": {...}, "proof": {...} }'></textarea>
+          </details>
+
           <div class="row">
             <button class="ghost" id="ld-valid">Load valid sample</button>
             <button class="ghost" id="ld-alter">Load altered sample</button>
@@ -162,6 +179,48 @@
       </div>
     </div>
   </dialog>
+
+  <!-- Certificate & QR modal (Phase 4) -->
+  <dialog id="cert-modal" class="block-modal" aria-labelledby="cm-title">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="cm-title">Certificate & QR Verification</h3>
+        <button class="ghost small" id="cm-close" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body" id="cm-body"></div>
+      <div class="modal-foot" style="gap:8px;">
+        <button class="ghost small" id="cm-dl">Download .json</button>
+        <button class="ghost small" id="cm-print">Print certificate</button>
+        <a class="primary small" id="cm-open" target="_blank" rel="noopener" style="text-decoration:none; display:inline-flex; align-items:center;">Open /v/:hash</a>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Guided Pitch Walkthrough (Phase 3) -->
+  <aside id="demo-guide" class="demo-guide" hidden aria-label="Guided Pitch Walkthrough">
+    <div class="dg-card">
+      <div class="dg-head">
+        <span class="dg-step-badge" id="dg-step-num">Step 1 of 5</span>
+        <div class="dg-actions">
+          <button class="dg-icon-btn" id="dg-autoplay-btn" title="Toggle auto-play (6s per step)" aria-label="Auto-play">
+            <svg class="icon-play" viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <svg class="icon-pause" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" hidden><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          </button>
+          <button class="dg-icon-btn" id="dg-close-btn" title="Exit walkthrough (Esc)" aria-label="Close demo">&times;</button>
+        </div>
+      </div>
+      <div class="dg-body">
+        <h3 class="dg-title" id="dg-title">Valid Certificate Accepted</h3>
+        <p class="dg-text" id="dg-desc">Sahyadri Institute issues a credential; a verifier checks the 7 cryptographic links using only the shared registry.</p>
+        <div class="dg-progress-bar"><div class="dg-progress-fill" id="dg-progress"></div></div>
+      </div>
+      <div class="dg-foot">
+        <button class="ghost small" id="dg-prev" disabled>Back</button>
+        <div class="dg-dots" id="dg-dots"></div>
+        <button class="primary small" id="dg-next">Next</button>
+      </div>
+    </div>
+  </aside>
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>

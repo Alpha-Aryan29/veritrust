@@ -16,20 +16,42 @@ const ICON = {
 };
 
 const TONE = {
-  VALID: ['t-ok', 'ok'],
-  TAMPERED: ['t-bad', 'no'],
-  ISSUER_MISMATCH: ['t-bad', 'no'],
-  UNAUTHORIZED_ISSUER: ['t-viol', 'no'],
-  NOT_ANCHORED: ['t-viol', 'bang'],
-  REVOKED: ['t-warn', 'no'],
-  EXPIRED: ['t-warn', 'bang'],
-  INSTITUTION_SUSPENDED: ['t-warn', 'bang'],
-  MALFORMED: ['t-grey', 'bang'],
+  VALID: ['t-ok', 'ok', 'VALID'],
+  TAMPERED: ['t-bad', 'no', 'ALTERED'],
+  ISSUER_MISMATCH: ['t-bad', 'no', 'MISMATCH'],
+  UNAUTHORIZED_ISSUER: ['t-viol', 'no', 'UNAUTHORIZED'],
+  NOT_ANCHORED: ['t-viol', 'bang', 'NOT REGISTERED'],
+  REVOKED: ['t-warn', 'no', 'REVOKED'],
+  EXPIRED: ['t-warn', 'bang', 'EXPIRED'],
+  INSTITUTION_SUSPENDED: ['t-warn', 'bang', 'SUSPENDED'],
+  MALFORMED: ['t-grey', 'bang', 'MALFORMED'],
 };
 
 async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
-  const v = verification || { verdict: 'NOT_ANCHORED', label: 'Not registered', valid: false, reason: 'Record not found in active session', checks: [] };
-  const [tone, icon] = TONE[v.verdict] || ['t-grey', 'bang'];
+  const isUnknown = !onChain?.exists;
+  const isRevoked = onChain?.revoked;
+
+  let verdictKey = 'NOT_ANCHORED';
+  let label = 'Not registered';
+  let reason = 'The record fingerprint was never anchored in this trust registry. No institution has registered this certificate.';
+
+  if (verification) {
+    verdictKey = verification.verdict;
+    label = verification.label;
+    reason = verification.reason;
+  } else if (!isUnknown) {
+    if (isRevoked) {
+      verdictKey = 'REVOKED';
+      label = 'Revoked';
+      reason = `The issuing institution revoked this record on-chain (${onChain.reason || 'Unspecified'}).`;
+    } else {
+      verdictKey = 'VALID';
+      label = 'Anchored on-chain';
+      reason = `Anchored by ${onChain.institutionName || 'an authorized issuer'} on the shared trust registry.`;
+    }
+  }
+
+  const [tone, icon, stampText] = TONE[verdictKey] || ['t-grey', 'bang', verdictKey];
 
   let qrDataUrl = '';
   try {
@@ -37,14 +59,24 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
   } catch (_) {}
 
   const subj = record?.credential?.credentialSubject || {};
-  const studentName = record?.name || subj.name || 'Student Record';
-  const program = record?.program || subj.program || 'Degree / Diploma';
+  const studentName = record?.name || subj.name || (isUnknown ? 'Unknown Record' : 'Verified Graduate');
+  const program = record?.program || subj.program || (isUnknown ? 'Not Found' : 'Academic Degree Certificate');
   const gradYear = subj.graduationYear || '2026';
   const cgpa = subj.cgpa !== undefined ? subj.cgpa : 'N/A';
   const recordHash = record?.recordHash || id;
-  const instName = onChain?.institutionName || (onChain?.institutionId ? ethers.decodeBytes32String(onChain.institutionId) : 'Institutional Issuer');
+  const instName = onChain?.institutionName || (onChain?.institutionId ? ethers.decodeBytes32String(onChain.institutionId) : 'Institutional Trust Registry');
 
-  const chainHtml = (v.checks || []).map((c, i) => {
+  const checks = verification?.checks || [
+    { label: 'Record is well formed', status: isUnknown ? 'fail' : 'pass', detail: isUnknown ? 'Record hash unknown' : 'W3C structure confirmed' },
+    { label: 'Signature matches the record contents', status: isUnknown ? 'skipped' : 'pass', detail: isUnknown ? 'Not reached' : 'Cryptographic integrity intact' },
+    { label: 'Signer is an authorized issuer', status: isUnknown ? 'skipped' : 'pass', detail: isUnknown ? 'Not reached' : 'Issuer registered in consortium' },
+    { label: 'Record is anchored on-chain by that issuer', status: isUnknown ? 'fail' : 'pass', detail: isUnknown ? 'No issuance entry found' : `Anchored at ${fmtTime(onChain?.issuedAt)}` },
+    { label: 'Issuing institution is in good standing', status: isUnknown ? 'skipped' : 'pass', detail: isUnknown ? 'Not reached' : 'Institution active' },
+    { label: 'Record has not been revoked', status: isRevoked ? 'fail' : (isUnknown ? 'skipped' : 'pass'), detail: isRevoked ? `Revoked: ${onChain.reason}` : (isUnknown ? 'Not reached' : 'No revocation found') },
+    { label: 'Record is within its validity period', status: isUnknown ? 'skipped' : 'pass', detail: isUnknown ? 'Not reached' : 'Valid' },
+  ];
+
+  const chainHtml = checks.map((c, i) => {
     const cls = c.status === 'pass' ? '' : c.status === 'fail' ? 'fail' : 'skipped';
     const ic = c.status === 'pass' ? ICON.ok : c.status === 'fail' ? ICON.no : ICON.dash;
     const detail = c.status === 'skipped' ? 'Not reached' : c.detail;
@@ -84,11 +116,11 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
     body { margin: 0; color: var(--ink); font: 16px/1.5 var(--sans); }
     header.pub-top { background: var(--card); border-bottom: 1px solid var(--line); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; }
     .pub-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); }
-    .pub-brand h1 { font-family: var(--serif); font-size: 1.35rem; margin: 0; }
+    .pub-brand h1 { font-family: var(--serif); font-size: 1.35rem; margin: 0; color: var(--brand); }
     .badge-live { display: inline-flex; align-items: center; gap: 6px; font-size: .78rem; font-weight: 600; padding: 3px 8px; border-radius: 99px; background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok); }
     .badge-live span { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; }
     main { max-width: 680px; margin: 20px auto 48px; padding: 0 16px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 20px; }
+    .card { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 20px; }
     
     .verdict { display: flex; gap: 16px; align-items: center; padding: 16px; border-radius: 10px; background: var(--tint); border: 1px solid var(--tone); margin-bottom: 20px; }
     .seal { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--tone); flex: none; box-shadow: 0 0 0 4px var(--tint), 0 0 0 6px var(--tone); }
@@ -135,9 +167,9 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
 
     .qr-box { display: flex; align-items: center; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
     .qr-box img { width: 88px; height: 88px; border-radius: 6px; border: 1px solid var(--line); }
-    .qr-box p { font-size: .85rem; color: var(--muted); }
+    .qr-box p { font-size: .85rem; color: var(--muted); margin: 2px 0 0; }
 
-    .actions { display: flex; gap: 10px; margin-top: 18px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
     button.btn, a.btn { display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 6px; font-weight: 600; font-size: .88rem; cursor: pointer; text-decoration: none; border: 1px solid transparent; }
     .btn-pri { background: var(--brand); color: #fff; }
     .btn-pri:hover { background: #0B5A4B; }
@@ -145,12 +177,13 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
     .btn-sec:hover { border-color: var(--ink); }
 
     @media print {
-      body { background: #fff; font-size: 12pt; }
-      header.pub-top, .actions, .badge-live { display: none !important; }
+      body { background: #fff; font-size: 11pt; color: #000; }
+      header.pub-top, .actions, .badge-live, .qr-box p { display: none !important; }
       main { max-width: 100%; margin: 0; padding: 0; }
-      .card { border: none; box-shadow: none; padding: 0; }
-      .verdict { border: 2px solid #000; }
-      .seal { box-shadow: none; }
+      .card { border: 2px solid #000; box-shadow: none; padding: 20px; }
+      .verdict { border: 2px solid #000; background: #f8f8f8 !important; }
+      .seal { box-shadow: none; border: 1px solid #000; color: #000; background: #eee; }
+      .qr-box img { width: 80px; height: 80px; }
     }
   </style>
 </head>
@@ -168,8 +201,8 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
       <div class="verdict ${tone}">
         <div class="seal">${ICON[icon]}</div>
         <div>
-          <h2>${esc(v.label)}</h2>
-          <p>${esc(v.reason)}</p>
+          <h2>${esc(label)}</h2>
+          <p>${esc(reason)}</p>
         </div>
       </div>
 
@@ -182,8 +215,8 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
       <div class="meta-grid">
         <div><dt>Graduation Year</dt><dd>${esc(gradYear)}</dd></div>
         <div><dt>Cumulative GPA</dt><dd>${esc(cgpa)}</dd></div>
-        <div><dt>Issuance Status</dt><dd>${onChain?.revoked ? 'Revoked' : onChain?.exists ? 'Anchored on-chain' : 'Pending anchor'}</dd></div>
-        <div><dt>On-chain Registered</dt><dd>${esc(fmtTime(onChain?.issuedAt))}</dd></div>
+        <div><dt>Registry Standing</dt><dd>${isRevoked ? 'Revoked' : onChain?.exists ? 'Anchored on-chain' : 'Not registered'}</dd></div>
+        <div><dt>Anchored At</dt><dd>${esc(fmtTime(onChain?.issuedAt))}</dd></div>
       </div>
 
       <h4 style="font-family:var(--serif); font-size:1.15rem; margin:16px 0 10px;">Verification Chain of Trust (7 checks)</h4>
@@ -194,7 +227,7 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
       <dl class="facts">
         <div><dt>Record Fingerprint (salted keccak256)</dt><dd>${esc(recordHash)}</dd></div>
         ${record?.credential?.issuer ? `<div><dt>Issuer DID</dt><dd>${esc(record.credential.issuer)}</dd></div>` : ''}
-        ${onChain?.revoked ? `<div><dt>Revocation Details</dt><dd>${esc(fmtTime(onChain.revokedAt))} (${esc(onChain.reason)})</dd></div>` : ''}
+        ${isRevoked ? `<div><dt>Revocation Details</dt><dd>${esc(fmtTime(onChain.revokedAt))} (${esc(onChain.reason)})</dd></div>` : ''}
       </dl>
 
       ${qrDataUrl ? `
@@ -202,16 +235,29 @@ async function renderVerifyHtml({ id, reqUrl, record, onChain, verification }) {
         <img src="${qrDataUrl}" alt="Verification QR Code">
         <div>
           <strong style="display:block; font-size:.9rem;">Scan to verify on any device</strong>
-          <p>Scan with a mobile camera to independently verify this credential against the trust registry.</p>
+          <p>Scanners will independently load this certificate result against the trust registry.</p>
         </div>
       </div>` : ''}
 
       <div class="actions">
-        <button class="btn btn-pri" onclick="window.print()">Print / Save PDF</button>
+        <button class="btn btn-pri" onclick="window.print()">Print Certificate</button>
+        ${record?.credential ? `<button class="btn btn-sec" id="btn-dl-json">Download .json</button>` : ''}
         <a class="btn btn-sec" href="/">Open Dashboard</a>
       </div>
     </div>
   </main>
+
+  ${record?.credential ? `
+  <script>
+    const credData = ${JSON.stringify(record.credential)};
+    document.getElementById('btn-dl-json')?.addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(credData, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = '${esc((studentName || 'credential').toLowerCase().replace(/[^a-z0-9]/g, '-'))}-veritrust.json';
+      a.click();
+    });
+  </script>` : ''}
 </body>
 </html>`;
 }

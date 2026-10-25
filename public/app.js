@@ -113,8 +113,17 @@ function updateStatusStrip(next) {
   }, 600);
 }
 
-/* ---------- certificate preview & verdict stamp ---------- */
-function certHTML(cred, verdict = null) {
+/* ---------- certificate preview, QR & download ---------- */
+function downloadJson(obj, filename = 'credential.json') {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function certHTML(cred, verdict = null, qrDataUrl = null) {
   if (!cred || !cred.credentialSubject) return '';
   const subj = cred.credentialSubject;
   const name = subj.name || 'Unnamed Student';
@@ -128,6 +137,16 @@ function certHTML(cred, verdict = null) {
     const [, , stampClass] = TONE[verdict.verdict] || ['t-grey', 'bang', 'stamp-malformed'];
     stampHtml = `<div class="stamp ${stampClass} stamped" aria-label="Verdict stamp: ${esc(verdict.label)}">${esc(verdict.label)}</div>`;
   }
+
+  const hash = V.currentHash;
+  const qrSection = qrDataUrl && hash ? `
+    <div class="cert-qr-wrap">
+      <div>
+        <div style="font-size:.78rem; color:var(--muted); text-transform:uppercase; font-weight:600;">Scan to verify on mobile</div>
+        <a href="/v/${esc(hash)}" target="_blank" rel="noopener" style="font-size:.82rem; color:var(--brand); text-decoration:underline;">Public link: /v/${esc(short(hash, 6, 4))}</a>
+      </div>
+      <img src="${qrDataUrl}" alt="Verification QR Code" class="cert-qr-img">
+    </div>` : '';
 
   return `
     <div class="cert-card" aria-label="Credential certificate preview">
@@ -148,7 +167,8 @@ function certHTML(cred, verdict = null) {
         <div><span>CGPA:</span><strong>${esc(cgpa)}</strong></div>
         ${cred.expirationDate ? `<div><span>Valid Until:</span><strong>${esc(cred.expirationDate.slice(0, 10))}</strong></div>` : ''}
       </div>
-      ${V.currentHash ? `<div class="cert-hash" title="On-chain fingerprint">Hash: ${esc(V.currentHash)}</div>` : ''}
+      ${hash ? `<div class="cert-hash" title="On-chain fingerprint">Hash: ${esc(hash)}</div>` : ''}
+      ${qrSection}
     </div>`;
 }
 
@@ -230,7 +250,92 @@ $('#ld-alter').addEventListener('click', async () => {
   setCred(c); toast('CGPA changed from 8.4 to 9.9 after signing');
   loadStatus();
 });
-$('#ld-forged').addEventListener('click', async () => { setCred(await sample('rogue')); toast('Signed by an unregistered key'); loadStatus(); });
+/* ---------- file-based verify (Phase 5) ---------- */
+function initDropZone() {
+  const zone = $('#drop-zone');
+  const fileInput = $('#file-input');
+  const errBox = $('#drop-err');
+  if (!zone || !fileInput) return;
+
+  function showDropErr(msg) {
+    errBox.textContent = msg;
+    errBox.hidden = false;
+  }
+  function clearDropErr() {
+    errBox.textContent = '';
+    errBox.hidden = true;
+  }
+
+  function handleFile(file) {
+    clearDropErr();
+    if (!file) return;
+
+    if (!file.name.endsWith('.json') && file.type && !file.type.includes('json')) {
+      showDropErr('Invalid file type: please select a .json credential file.');
+      return;
+    }
+    if (file.size > 512 * 1024) {
+      showDropErr('File exceeds the 512 KB size limit. Please provide a standard credential JSON.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const text = e.target.result;
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          showDropErr('The selected file is not valid JSON. Please check formatting.');
+          return;
+        }
+
+        if (!data || typeof data !== 'object') {
+          showDropErr('Credential file must contain a JSON object.');
+          return;
+        }
+        if (!data.issuer || !data.credentialSubject || !data.proof) {
+          showDropErr('Missing required W3C credential fields (issuer, credentialSubject, or proof).');
+          return;
+        }
+
+        setCred(data);
+        toast(`Loaded ${file.name}`);
+        clearDropErr();
+        await runVerify();
+      } catch (err) {
+        showDropErr(`Could not read file: ${err.message}`);
+      }
+    };
+    reader.onerror = () => showDropErr('Error reading file from disk.');
+    reader.readAsText(file);
+  }
+
+  zone.addEventListener('click', () => fileInput.click());
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) handleFile(fileInput.files[0]);
+    fileInput.value = '';
+  });
+
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('dragover');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+}
 
 /* ---------- issue ---------- */
 $('#issue-form').addEventListener('submit', async (ev) => {
@@ -243,15 +348,44 @@ $('#issue-form').addEventListener('submit', async (ev) => {
       subject: { name: $('#i-name').value, program: $('#i-program').value, graduationYear: $('#i-year').value, cgpa: $('#i-cgpa').value },
     });
     const ok = r.anchored;
+    V.currentHash = r.recordHash;
+    V.currentCred = r.credential;
+
+    let qrDataUrl = '';
+    if (ok) {
+      try {
+        const qrUrl = `${location.origin}/v/${r.recordHash}`;
+        const qRes = await api(`/api/qr?text=${encodeURIComponent(qrUrl)}`);
+        qrDataUrl = qRes.dataUrl;
+      } catch (_) {}
+    }
+
     $('#issue-out').className = '';
     $('#issue-out').innerHTML = `
       <div class="msg ${ok ? 't-ok' : 't-viol'}"><b>${ok ? 'Registered on-chain' : 'Registry rejected this issuance'}</b>
         ${ok ? `Issued by ${esc(r.issuedBy)}. Gas used: ${r.tx.gasUsed.toLocaleString()}. Transaction ${esc(short(r.tx.txHash, 10, 8))}.`
              : `${esc(errText(r.tx.error))} The signed record still exists off-chain. Send it to Verify to see how it is caught.`}</div>
+      ${ok && qrDataUrl ? `
+      <div class="cert-qr-wrap" style="background:#fff; padding:12px 14px; border-radius:8px; border:1px solid var(--line); margin-bottom:12px;">
+        <div>
+          <strong style="display:block; font-size:.92rem; color:var(--ink);">Certificate QR Code</strong>
+          <span style="font-size:.82rem; color:var(--muted);">Scan with any phone camera on this network to verify live</span>
+          <div style="margin-top:6px;"><a href="/v/${esc(r.recordHash)}" target="_blank" rel="noopener" style="font-size:.84rem; color:var(--brand); text-decoration:underline; font-weight:600;">Open mobile verification page (/v/${esc(short(r.recordHash, 6, 4))})</a></div>
+        </div>
+        <img src="${qrDataUrl}" alt="QR code" class="cert-qr-img" style="width:80px; height:80px;">
+      </div>` : ''}
       <dl class="facts"><dt>Record fingerprint</dt><dd>${esc(r.recordHash)}</dd></dl>
-      <div class="row"><button class="ghost" id="to-verify">Send to Verify</button><button class="ghost" id="copy-cred">Copy record</button></div>
+      <div class="row">
+        <button class="ghost" id="to-verify">Send to Verify</button>
+        <button class="ghost" id="to-cert">View certificate</button>
+        <button class="ghost" id="dl-cred">Download .json</button>
+        <button class="ghost" id="copy-cred">Copy record</button>
+      </div>
       <pre class="code">${esc(JSON.stringify(r.credential, null, 2))}</pre>`;
+
     $('#to-verify').addEventListener('click', () => { setCred(r.credential); showTab('verify'); runVerify(); });
+    $('#to-cert')?.addEventListener('click', () => openCertModal({ name: $('#i-name').value, credential: r.credential, recordHash: r.recordHash, issuedBy: r.issuedBy, anchored: ok, revoked: false }));
+    $('#dl-cred')?.addEventListener('click', () => downloadJson(r.credential, `${$('#i-name').value.toLowerCase().replace(/[^a-z0-9]/g, '-')}-veritrust.json`));
     $('#copy-cred').addEventListener('click', () => navigator.clipboard.writeText(JSON.stringify(r.credential, null, 2)).then(() => toast('Record copied')));
     loadStatus();
   } catch (e) { toast(e.message); } finally { btn.disabled = false; }
@@ -273,8 +407,10 @@ async function loadRecords() {
       <td><b>${esc(r.name)}</b><br><span class="hash" title="${esc(r.recordHash)}">${esc(short(r.recordHash, 10, 8))}</span></td>
       <td>${esc(r.issuedBy)}</td>
       <td class="status-cell"><span class="badge ${cls}">${esc(label)}</span></td>
-      <td class="action-cell">${r.anchored && !r.revoked ? `<button class="small rv">Revoke…</button>` : ''}
+      <td class="action-cell">
+        <button class="small ct">Certificate</button>
         <button class="small vf">Verify</button>
+        ${r.anchored && !r.revoked ? `<button class="small rv">Revoke…</button>` : ''}
         <div class="rev-box" hidden>
           <select class="who" aria-label="Revoke as">${actorOpts}</select>
           <select class="why" aria-label="Reason">${REASONS.map((x, k) => `<option value="${k}">${x}</option>`).join('')}</select>
@@ -286,6 +422,7 @@ async function loadRecords() {
     const r = rows[Number(tr.dataset.i)];
     const rb = $('.rev-box', tr);
     if ($('.who', tr)) $('.who', tr).value = r.actor;
+    $('.ct', tr)?.addEventListener('click', () => openCertModal(r));
     $('.rv', tr)?.addEventListener('click', () => { rb.hidden = !rb.hidden; });
     $('.vf', tr).addEventListener('click', () => { setCred(r.credential); showTab('verify'); runVerify(); });
     $('.go', tr)?.addEventListener('click', async () => {
@@ -300,6 +437,40 @@ async function loadRecords() {
     });
   });
 }
+
+/* Certificate inspection modal (Phase 4) */
+async function openCertModal(record) {
+  const modal = $('#cert-modal');
+  $('#cm-title').textContent = `${record.name || 'Student'} - Credential Certificate`;
+  const qrUrl = `${location.origin}/v/${record.recordHash}`;
+  let qrDataUrl = '';
+  try {
+    const res = await api(`/api/qr?text=${encodeURIComponent(qrUrl)}`);
+    qrDataUrl = res.dataUrl;
+  } catch (_) {}
+
+  const verdict = {
+    verdict: record.revoked ? 'REVOKED' : record.anchored ? 'VALID' : 'NOT_ANCHORED',
+    label: record.revoked ? `Revoked: ${record.reason}` : record.anchored ? 'Valid' : 'Not registered',
+  };
+
+  $('#cm-body').innerHTML = `
+    ${certHTML(record.credential, verdict, qrDataUrl)}
+    <div style="font-size:.84rem; color:var(--muted); margin-top:8px;">
+      Issued by <b>${esc(record.issuedBy)}</b> &bull; Status: <b>${record.revoked ? 'Revoked' : record.anchored ? 'Active' : 'Unregistered'}</b>
+    </div>`;
+
+  $('#cm-dl').onclick = () => downloadJson(record.credential, `${(record.name || 'credential').toLowerCase().replace(/[^a-z0-9]/g, '-')}-veritrust.json`);
+  $('#cm-print').onclick = () => window.print();
+  $('#cm-open').href = `/v/${record.recordHash}`;
+
+  modal.showModal();
+}
+
+$('#cm-close')?.addEventListener('click', () => $('#cert-modal').close());
+$('#cert-modal')?.addEventListener('click', (e) => {
+  if (e.target === $('#cert-modal')) $('#cert-modal').close();
+});
 
 /* Handle live revocation broadcast across windows */
 function handleLiveRevocation(ev) {
@@ -596,6 +767,233 @@ function initSSE() {
   }
 }
 
+/* ---------- guided demo mode (Phase 3) ---------- */
+V.demo = {
+  active: false,
+  step: 0,
+  autoplay: false,
+  timer: null,
+  progressTimer: null,
+  progress: 0,
+};
+
+const DEMO_STEPS = [
+  {
+    step: 1,
+    title: 'Valid Record Accepted',
+    desc: 'Sahyadri Institute issues a credential; a verifier checks the 7 cryptographic links using only the shared registry.',
+    run: async () => {
+      showTab('verify');
+      const c = await sample('sitRegistry');
+      setCred(c);
+      await runVerify();
+    },
+  },
+  {
+    step: 2,
+    title: 'Altered Record Detected',
+    desc: 'When an attacker modifies the CGPA from 8.4 to 9.9, the fingerprint changes and breaks the chain at the signature check.',
+    run: async () => {
+      showTab('verify');
+      const c = await sample('sitRegistry');
+      c.credentialSubject.cgpa = 9.9;
+      setCred(c);
+      await runVerify();
+    },
+  },
+  {
+    step: 3,
+    title: 'Unauthorized Issuer Rejected',
+    desc: 'An unregistered degree mill signs a forged diploma; the smart contract rejects issuance on-chain, and its self-signed record fails verification.',
+    run: async () => {
+      showTab('issue');
+      $('#i-actor').value = 'rogue';
+      $('#i-name').value = 'Forged Graduate';
+      $('#i-program').value = 'MBA in Management';
+      const r = await api('/api/issue', {
+        actor: 'rogue',
+        subject: { name: 'Forged Graduate', program: 'MBA in Management' },
+      });
+      $('#issue-out').className = '';
+      $('#issue-out').innerHTML = `
+        <div class="msg t-viol"><b>Registry rejected this issuance</b>
+          ${esc(errText(r.tx.error))} The signed record still exists off-chain. Sending to Verify...</div>
+        <dl class="facts"><dt>Record fingerprint</dt><dd>${esc(r.recordHash)}</dd></dl>`;
+      await new Promise((res) => setTimeout(res, 1200));
+      setCred(r.credential);
+      showTab('verify');
+      await runVerify();
+    },
+  },
+  {
+    step: 4,
+    title: 'Unauthorized Revocation Rejected',
+    desc: 'Konkan State University attempts to revoke SIT\'s record; the smart contract strictly enforces role authority and reverts NotRecordAuthority.',
+    run: async () => {
+      showTab('records');
+      const good = await api('/api/issue', { actor: 'sitRegistry', subject: { name: 'Rohan Mehta', program: 'B.Tech CE' } });
+      V.demoRecord = good;
+      await loadRecords();
+      const tr = $(`tr[data-hash="${good.recordHash}"]`);
+      if (tr) {
+        const rb = $('.rev-box', tr);
+        if (rb) {
+          rb.hidden = false;
+          const who = $('.who', tr);
+          if (who) who.value = 'ksuRegistry';
+        }
+      }
+      const out = await api('/api/revoke', { actor: 'ksuRegistry', recordHash: good.recordHash, reason: 2 });
+      if (tr) {
+        $('.note', tr).textContent = `Rejected by the contract: ${errText(out.tx.error)}`;
+      }
+      toast(`Unauthorized revocation blocked: ${out.tx.error}`);
+    },
+  },
+  {
+    step: 5,
+    title: 'Revoked Record Detected Live',
+    desc: 'When the authentic SIT issuer revokes the certificate, the revocation anchors on-chain and verifiers immediately detect it.',
+    run: async () => {
+      showTab('records');
+      let recHash = V.demoRecord?.recordHash;
+      let cred = V.demoRecord?.credential;
+      if (!recHash) {
+        const fresh = await api('/api/issue', { actor: 'sitRegistry', subject: { name: 'Meera Joshi', program: 'B.Tech IT' } });
+        recHash = fresh.recordHash;
+        cred = fresh.credential;
+      }
+      await api('/api/revoke', { actor: 'sitRegistry', recordHash: recHash, reason: 3 });
+      await loadRecords();
+      toast('Record revoked by issuing institution');
+      await new Promise((res) => setTimeout(res, 800));
+      setCred(cred);
+      showTab('verify');
+      await runVerify();
+    },
+  },
+];
+
+function startDemo() {
+  V.demo.active = true;
+  V.demo.step = 0;
+  const guide = $('#demo-guide');
+  guide.hidden = false;
+
+  // Render dots
+  const dots = $('#dg-dots');
+  dots.innerHTML = DEMO_STEPS.map((_, i) => `<button class="dg-dot" data-step="${i}" aria-label="Go to step ${i + 1}"></button>`).join('');
+  dots.querySelectorAll('.dg-dot').forEach((d) => {
+    d.onclick = () => loadDemoStep(Number(d.dataset.step));
+  });
+
+  loadDemoStep(0);
+}
+
+function stopDemo() {
+  V.demo.active = false;
+  clearTimeout(V.demo.timer);
+  clearInterval(V.demo.progressTimer);
+  $('#demo-guide').hidden = true;
+  if (V.demo.autoplay) toggleAutoPlay();
+}
+
+async function loadDemoStep(idx) {
+  if (idx < 0 || idx >= DEMO_STEPS.length) return;
+  V.demo.step = idx;
+  const s = DEMO_STEPS[idx];
+
+  $('#dg-step-num').textContent = `Step ${idx + 1} of 5`;
+  $('#dg-title').textContent = s.title;
+  $('#dg-desc').textContent = s.desc;
+  $('#dg-prev').disabled = idx === 0;
+  $('#dg-next').textContent = idx === DEMO_STEPS.length - 1 ? 'Finish' : 'Next';
+
+  $('#dg-dots').querySelectorAll('.dg-dot').forEach((d, i) => {
+    d.classList.toggle('active', i === idx);
+  });
+
+  // Run the real action
+  clearTimeout(V.demo.timer);
+  clearInterval(V.demo.progressTimer);
+  $('#dg-progress').style.width = '0%';
+
+  try {
+    await s.run();
+  } catch (err) {
+    console.error('Demo step error:', err);
+  }
+
+  // If autoplay is active, schedule next step after 6.5s with smooth progress bar
+  if (V.demo.autoplay) {
+    const totalMs = 6500;
+    const interval = 50;
+    let elapsed = 0;
+    V.demo.progressTimer = setInterval(() => {
+      elapsed += interval;
+      const pct = Math.min(100, (elapsed / totalMs) * 100);
+      $('#dg-progress').style.width = `${pct}%`;
+      if (elapsed >= totalMs) {
+        clearInterval(V.demo.progressTimer);
+        if (V.demo.step < DEMO_STEPS.length - 1) {
+          loadDemoStep(V.demo.step + 1);
+        } else {
+          stopDemo();
+          toast('Demo walkthrough completed');
+        }
+      }
+    }, interval);
+  }
+}
+
+function toggleAutoPlay() {
+  V.demo.autoplay = !V.demo.autoplay;
+  const btn = $('#dg-autoplay-btn');
+  $('.icon-play', btn).hidden = V.demo.autoplay;
+  $('.icon-pause', btn).hidden = !V.demo.autoplay;
+  btn.classList.toggle('active', V.demo.autoplay);
+
+  if (V.demo.autoplay) {
+    toast('Auto-play started (6s per step)');
+    loadDemoStep(V.demo.step);
+  } else {
+    clearTimeout(V.demo.timer);
+    clearInterval(V.demo.progressTimer);
+    $('#dg-progress').style.width = '0%';
+    toast('Auto-play paused');
+  }
+}
+
+$('#btn-play-demo')?.addEventListener('click', startDemo);
+$('#dg-close-btn')?.addEventListener('click', stopDemo);
+$('#dg-autoplay-btn')?.addEventListener('click', toggleAutoPlay);
+$('#dg-prev')?.addEventListener('click', () => {
+  if (V.demo.step > 0) loadDemoStep(V.demo.step - 1);
+});
+$('#dg-next')?.addEventListener('click', () => {
+  if (V.demo.step < DEMO_STEPS.length - 1) {
+    loadDemoStep(V.demo.step + 1);
+  } else {
+    stopDemo();
+    toast('Demo walkthrough finished');
+  }
+});
+
+// Keyboard navigation
+window.addEventListener('keydown', (e) => {
+  if (!V.demo.active) return;
+  if (e.key === 'Escape') {
+    stopDemo();
+  } else if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') {
+    if (V.demo.step < DEMO_STEPS.length - 1) loadDemoStep(V.demo.step + 1);
+  } else if (e.key === 'ArrowLeft' || e.key === 'p' || e.key === 'P') {
+    if (V.demo.step > 0) loadDemoStep(V.demo.step - 1);
+  } else if (e.key === ' ') {
+    e.preventDefault();
+    toggleAutoPlay();
+  }
+});
+
 /* ---------- boot ---------- */
 async function boot() {
   await loadStatus();
@@ -604,6 +1002,7 @@ async function boot() {
     renderRibbon(blocks);
   } catch (_) {}
   initSSE();
+  initDropZone();
   showTab((location.hash || '#verify').slice(1));
 }
 
