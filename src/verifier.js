@@ -124,9 +124,20 @@ async function verifyCredential(registry, input, { now = Date.now() } = {}) {
   set('status', 'pass', 'No revocation event found');
 
   // 7. Validity window
-  if (cred.expirationDate && Date.parse(cred.expirationDate) < now) {
-    set('validity', 'fail', `Expired on ${cred.expirationDate.slice(0, 10)}`);
-    return finish('EXPIRED', 'The record is past its expiration date.', { recordHash, onChain });
+  if (cred.expirationDate) {
+    if (typeof cred.expirationDate !== 'string') {
+      set('validity', 'fail', 'Invalid expiration date format');
+      return finish('MALFORMED', 'The record has an invalid expiration date.', { recordHash, onChain });
+    }
+    const expTime = Date.parse(cred.expirationDate);
+    if (Number.isNaN(expTime)) {
+      set('validity', 'fail', 'Invalid expiration date format');
+      return finish('MALFORMED', 'The record has an invalid expiration date.', { recordHash, onChain });
+    }
+    if (expTime < now) {
+      set('validity', 'fail', `Expired on ${cred.expirationDate.slice(0, 10)}`);
+      return finish('EXPIRED', 'The record is past its expiration date.', { recordHash, onChain });
+    }
   }
   set('validity', 'pass', cred.expirationDate ? `Valid until ${cred.expirationDate.slice(0, 10)}` : 'No expiry set');
 

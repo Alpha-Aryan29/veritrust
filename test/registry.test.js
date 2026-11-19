@@ -119,7 +119,85 @@ test('an authorized issuer cannot pass off another issuer\'s anchor (issuer mism
 
 test('expired record is flagged', async () => {
   const r = await svc.issueRecord(ctx, { actor: 'sitRegistry', subject: subject('Old'), validDays: -2 });
-  assert.equal((await svc.verify(ctx, r.credential)).verdict, 'EXPIRED');
+  const v = await svc.verify(ctx, r.credential);
+  assert.equal(v.verdict, 'EXPIRED');
+  assert.equal(v.valid, false);
+  const validityCheck = v.checks.find((c) => c.id === 'validity');
+  assert.equal(validityCheck.status, 'fail');
+  assert.ok(validityCheck.detail.startsWith('Expired on '));
+});
+
+test('valid future expiration date verifies with VALID', async () => {
+  const r = await svc.issueRecord(ctx, { actor: 'sitRegistry', subject: subject('Future Expiry'), validDays: 365 });
+  const v = await svc.verify(ctx, r.credential);
+  assert.equal(v.verdict, 'VALID');
+  assert.equal(v.valid, true);
+  const validityCheck = v.checks.find((c) => c.id === 'validity');
+  assert.equal(validityCheck.status, 'pass');
+  assert.ok(validityCheck.detail.startsWith('Valid until '));
+});
+
+test('invalid expiration date string is flagged MALFORMED', async () => {
+  const { signCredential, buildCredential } = require('../src/credential');
+  for (const badDate of ['not-a-date', '2025-99-99', 'invalid-iso-string']) {
+    const unsigned = buildCredential({ issuerAddress: ctx.actors.sitRegistry.address, subject: subject('Invalid Expiry ' + badDate) });
+    unsigned.expirationDate = badDate;
+    const signed = await signCredential(unsigned, ctx.actors.sitRegistry.wallet);
+    assert.equal((await svc.exec(ctx, 'sitRegistry', 'issueRecord', [hashCredential(signed)])).ok, true);
+    const v = await svc.verify(ctx, signed);
+    assert.equal(v.verdict, 'MALFORMED', `Expected MALFORMED for date: ${badDate}`);
+    assert.equal(v.valid, false);
+    const validityCheck = v.checks.find((c) => c.id === 'validity');
+    assert.equal(validityCheck.status, 'fail');
+    assert.equal(validityCheck.detail, 'Invalid expiration date format');
+  }
+});
+
+test('empty or missing expiration date verifies as VALID with No expiry set according to conventions', async () => {
+  const { signCredential, buildCredential } = require('../src/credential');
+  // 1. Missing expiration date (omitted)
+  const rMissing = await svc.issueRecord(ctx, { actor: 'sitRegistry', subject: subject('Missing Expiry') });
+  assert.equal(rMissing.credential.expirationDate, undefined);
+  const vMissing = await svc.verify(ctx, rMissing.credential);
+  assert.equal(vMissing.verdict, 'VALID');
+  assert.equal(vMissing.valid, true);
+  assert.equal(vMissing.checks.find((c) => c.id === 'validity').detail, 'No expiry set');
+
+  // 2. Empty string expiration date
+  const unsignedEmptyStr = buildCredential({ issuerAddress: ctx.actors.sitRegistry.address, subject: subject('Empty Expiry Str') });
+  unsignedEmptyStr.expirationDate = '';
+  const signedEmptyStr = await signCredential(unsignedEmptyStr, ctx.actors.sitRegistry.wallet);
+  assert.equal((await svc.exec(ctx, 'sitRegistry', 'issueRecord', [hashCredential(signedEmptyStr)])).ok, true);
+  const vEmptyStr = await svc.verify(ctx, signedEmptyStr);
+  assert.equal(vEmptyStr.verdict, 'VALID');
+  assert.equal(vEmptyStr.valid, true);
+  assert.equal(vEmptyStr.checks.find((c) => c.id === 'validity').detail, 'No expiry set');
+
+  // 3. Null expiration date
+  const unsignedNull = buildCredential({ issuerAddress: ctx.actors.sitRegistry.address, subject: subject('Null Expiry') });
+  unsignedNull.expirationDate = null;
+  const signedNull = await signCredential(unsignedNull, ctx.actors.sitRegistry.wallet);
+  assert.equal((await svc.exec(ctx, 'sitRegistry', 'issueRecord', [hashCredential(signedNull)])).ok, true);
+  const vNull = await svc.verify(ctx, signedNull);
+  assert.equal(vNull.verdict, 'VALID');
+  assert.equal(vNull.valid, true);
+  assert.equal(vNull.checks.find((c) => c.id === 'validity').detail, 'No expiry set');
+});
+
+test('non-string and whitespace expiration dates are flagged MALFORMED without throwing', async () => {
+  const { signCredential, buildCredential } = require('../src/credential');
+  for (const badExp of [1735689600000, true, {}, '   ']) {
+    const unsigned = buildCredential({ issuerAddress: ctx.actors.sitRegistry.address, subject: subject('Bad Exp Type') });
+    unsigned.expirationDate = badExp;
+    const signed = await signCredential(unsigned, ctx.actors.sitRegistry.wallet);
+    assert.equal((await svc.exec(ctx, 'sitRegistry', 'issueRecord', [hashCredential(signed)])).ok, true);
+    const v = await svc.verify(ctx, signed);
+    assert.equal(v.verdict, 'MALFORMED', `Expected MALFORMED for non-string/whitespace expirationDate: ${badExp}`);
+    assert.equal(v.valid, false);
+    const validityCheck = v.checks.find((c) => c.id === 'validity');
+    assert.equal(validityCheck.status, 'fail');
+    assert.equal(validityCheck.detail, 'Invalid expiration date format');
+  }
 });
 
 test('removing an issuer key blocks new issuance but keeps earlier records valid', async () => {
